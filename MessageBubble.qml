@@ -33,23 +33,53 @@ Item {
     width: parent ? parent.width : implicitWidth
     implicitHeight: bubble.implicitHeight
 
+    // Error shake transform
+    transform: Translate {
+        id: shakeTranslate
+
+        SequentialAnimation on x {
+            id: shakeAnim
+            running: false
+            NumberAnimation { to: -4; duration: 50; easing.type: Easing.InOutQuad }
+            NumberAnimation { to: 4; duration: 50; easing.type: Easing.InOutQuad }
+            NumberAnimation { to: -3; duration: 50; easing.type: Easing.InOutQuad }
+            NumberAnimation { to: 3; duration: 50; easing.type: Easing.InOutQuad }
+            NumberAnimation { to: 0; duration: 50; easing.type: Easing.OutQuad }
+        }
+    }
+
+    onStatusChanged: {
+        if (status === "error") shakeAnim.start();
+    }
+
     Rectangle {
         id: bubble
         width: Math.min(root.bubbleMaxWidth, root.width)
         x: root.isUser ? (root.width - width) : 0
         radius: Theme.cornerRadius
-        color: root.isUser ? root.userBubbleFill : root.assistantBubbleFill
+        color: {
+            if (root.isUser) return root.userBubbleFill;
+            return hoverHandler.hovered ? Qt.lighter(root.assistantBubbleFill, 1.08) : root.assistantBubbleFill;
+        }
         border.color: status === "error" ? Theme.error : (root.isUser ? root.userBubbleBorder : root.assistantBubbleBorder)
         border.width: 1
 
         implicitHeight: contentColumn.implicitHeight + Theme.spacingM * 2
         height: implicitHeight
 
+        Behavior on color {
+            ColorAnimation { duration: 150; easing.type: Easing.OutCubic }
+        }
+
         Behavior on x {
             NumberAnimation {
                 duration: 120
                 easing.type: Easing.OutCubic
             }
+        }
+
+        HoverHandler {
+            id: hoverHandler
         }
 
         Column {
@@ -70,15 +100,20 @@ Item {
                     radius: Theme.cornerRadius
                     color: root.isUser ? Theme.withAlpha(Theme.primary, 0.14) : Theme.surfaceVariant
                     Layout.preferredHeight: Theme.fontSizeSmall * 1.6
-                    Layout.preferredWidth: headerText.implicitWidth + Theme.spacingS * 2
+                    Layout.preferredWidth: Math.min(headerText.implicitWidth + Theme.spacingS * 2, 160)
+                    clip: true
 
                     StyledText {
                         id: headerText
                         anchors.centerIn: parent
+                        width: parent.width - Theme.spacingS * 2
                         text: root.isUser ? "You" : root.modelName
                         font.pixelSize: Theme.fontSizeSmall
                         font.weight: Font.Medium
                         color: root.isUser ? Theme.primary : Theme.surfaceVariantText
+                        wrapMode: Text.NoWrap
+                        elide: Text.ElideRight
+                        horizontalAlignment: Text.AlignHCenter
                     }
                 }
 
@@ -102,6 +137,7 @@ Item {
 
                 DankActionButton {
                     visible: !root.isUser && root.status === "ok"
+                    opacity: hoverHandler.hovered ? 1.0 : 0.0
                     iconName: "content_copy"
                     buttonSize: 24
                     iconSize: 14
@@ -111,12 +147,18 @@ Item {
                     onClicked: {
                         Quickshell.execDetached(["wl-copy", root.text]);
                     }
+
+                    Behavior on opacity {
+                        NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
+                    }
                 }
             }
 
-            Item {
-                width: 1
-                height: Theme.spacingS
+            // Header-content separator
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: Theme.withAlpha(Theme.outline, 0.15)
             }
 
             StyledText {
@@ -154,20 +196,41 @@ Item {
                 hoverEnabled: true
             }
 
-            Rectangle {
+            // Pulsing streaming dots
+            Row {
                 visible: status === "streaming"
-                radius: Theme.cornerRadius
-                color: Theme.surfaceVariant
-                height: Theme.fontSizeSmall * 1.6
-                width: streamingText.implicitWidth + Theme.spacingS * 2
+                spacing: 6
+                height: visible ? Theme.fontSizeSmall * 1.6 : 0
                 x: root.isUser ? (parent.width - width) : 0
 
-                StyledText {
-                    id: streamingText
-                    anchors.centerIn: parent
-                    text: "Streaming\u2026"
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceVariantText
+                Repeater {
+                    model: 3
+                    Rectangle {
+                        id: dot
+                        width: 7
+                        height: 7
+                        radius: 3.5
+                        color: Theme.primary
+                        opacity: 0.4
+                        scale: 1.0
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        SequentialAnimation on opacity {
+                            loops: Animation.Infinite
+                            PauseAnimation { duration: index * 160 }
+                            NumberAnimation { to: 1.0; duration: 400; easing.type: Easing.InOutSine }
+                            NumberAnimation { to: 0.4; duration: 400; easing.type: Easing.InOutSine }
+                            PauseAnimation { duration: (2 - index) * 160 }
+                        }
+
+                        SequentialAnimation on scale {
+                            loops: Animation.Infinite
+                            PauseAnimation { duration: index * 160 }
+                            NumberAnimation { to: 1.4; duration: 400; easing.type: Easing.InOutSine }
+                            NumberAnimation { to: 1.0; duration: 400; easing.type: Easing.InOutSine }
+                            PauseAnimation { duration: (2 - index) * 160 }
+                        }
+                    }
                 }
             }
         }

@@ -1,5 +1,6 @@
 import QtQuick
 import Quickshell
+import Quickshell.Io
 import qs.Common
 import qs.Widgets
 import qs.Services
@@ -17,6 +18,15 @@ Item {
         }
     }
 
+    IpcHandler {
+        target: "ephemera"
+
+        function toggle(): string {
+            root.toggle();
+            return "EPHEMERA_TOGGLE_SUCCESS";
+        }
+    }
+
     EphemeraService {
         id: ephemeraService
         pluginId: root.pluginId
@@ -29,13 +39,16 @@ Item {
         delegate: DankSlideout {
             id: slideout
             required property var modelData
-            title: "Ephemera"
+            title: ""
             slideoutWidth: 480
             expandable: true
             expandedWidthValue: 960
 
             content: EphemeraChat {
                 aiService: ephemeraService
+                slideoutExpandable: slideout.expandable
+                slideoutExpanded: slideout.expandedWidth
+                onExpandToggled: slideout.expandedWidth = !slideout.expandedWidth
                 onHideRequested: slideout.hide()
             }
         }

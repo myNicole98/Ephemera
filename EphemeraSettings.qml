@@ -66,7 +66,7 @@ Item {
                     anchors.horizontalCenter: parent.horizontalCenter
                     spacing: Theme.spacingL
 
-                    // ── Card 1: Provider ─────────────────────────────────
+                    // -- Card 1: Provider --
                     Rectangle {
                         width: parent.width
                         height: providerContent.height + Theme.spacingL * 2
@@ -121,39 +121,61 @@ Item {
                                     }
                                 }
 
-                                // Ollama URL (only visible for Ollama)
-                                StyledText {
-                                    visible: aiService.provider === "ollama"
-                                    text: "Ollama URL"
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    color: Theme.surfaceVariantText
-                                }
-                                DankTextField {
-                                    visible: aiService.provider === "ollama"
+                                // Ollama URL — accordion container
+                                Item {
                                     width: parent.width
-                                    text: aiService.ollamaUrl
-                                    placeholderText: "http://localhost:11434"
-                                    onEditingFinished: {
-                                        aiService.ollamaUrl = text.trim();
-                                        aiService.saveSettingValue("ollamaUrl", text.trim());
+                                    height: aiService.provider === "ollama" ? ollamaUrlCol.implicitHeight : 0
+                                    clip: true
+                                    Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+
+                                    Column {
+                                        id: ollamaUrlCol
+                                        width: parent.width
+                                        spacing: Theme.spacingS
+
+                                        StyledText {
+                                            text: "Ollama URL"
+                                            font.pixelSize: Theme.fontSizeSmall
+                                            color: Theme.surfaceVariantText
+                                        }
+                                        DankTextField {
+                                            width: parent.width
+                                            text: aiService.ollamaUrl
+                                            placeholderText: "http://localhost:11434"
+                                            onEditingFinished: {
+                                                aiService.ollamaUrl = text.trim();
+                                                aiService.saveSettingValue("ollamaUrl", text.trim());
+                                            }
+                                        }
                                     }
                                 }
 
-                                // Custom base URL (only for custom provider)
-                                StyledText {
-                                    visible: aiService.provider === "custom"
-                                    text: "Base URL"
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    color: Theme.surfaceVariantText
-                                }
-                                DankTextField {
-                                    visible: aiService.provider === "custom"
+                                // Custom base URL — accordion container
+                                Item {
                                     width: parent.width
-                                    text: aiService.baseUrl
-                                    placeholderText: "https://api.openai.com"
-                                    onEditingFinished: {
-                                        aiService.baseUrl = text.trim();
-                                        aiService.saveSettingValue("customBaseUrl", text.trim());
+                                    height: aiService.provider === "custom" ? customUrlCol.implicitHeight : 0
+                                    clip: true
+                                    Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+
+                                    Column {
+                                        id: customUrlCol
+                                        width: parent.width
+                                        spacing: Theme.spacingS
+
+                                        StyledText {
+                                            text: "Base URL"
+                                            font.pixelSize: Theme.fontSizeSmall
+                                            color: Theme.surfaceVariantText
+                                        }
+                                        DankTextField {
+                                            width: parent.width
+                                            text: aiService.baseUrl
+                                            placeholderText: "https://api.openai.com"
+                                            onEditingFinished: {
+                                                aiService.baseUrl = text.trim();
+                                                aiService.saveSettingValue("customBaseUrl", text.trim());
+                                            }
+                                        }
                                     }
                                 }
 
@@ -164,57 +186,78 @@ Item {
                                     color: Theme.surfaceVariantText
                                 }
 
-                                // Dropdown for Ollama (auto-discovered models)
-                                DankDropdown {
-                                    visible: aiService.provider === "ollama" && aiService.availableModels.count > 0
+                                // Dropdown for Ollama — accordion
+                                Item {
                                     width: parent.width
-                                    options: {
-                                        var opts = [];
-                                        for (var i = 0; i < aiService.availableModels.count; i++) {
-                                            opts.push(aiService.availableModels.get(i).name);
+                                    height: (aiService.provider === "ollama" && aiService.availableModels.count > 0) ? ollamaModelDropdown.implicitHeight : 0
+                                    clip: true
+                                    Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+
+                                    DankDropdown {
+                                        id: ollamaModelDropdown
+                                        width: parent.width
+                                        options: {
+                                            var opts = [];
+                                            for (var i = 0; i < aiService.availableModels.count; i++) {
+                                                opts.push(aiService.availableModels.get(i).name);
+                                            }
+                                            return opts;
                                         }
-                                        return opts;
-                                    }
-                                    currentValue: aiService.model
-                                    onValueChanged: value => {
-                                        aiService.model = value;
-                                        aiService.saveSettingValue("model", value);
+                                        currentValue: aiService.model
+                                        onValueChanged: value => {
+                                            aiService.model = value;
+                                            aiService.saveSettingValue("model", value);
+                                        }
                                     }
                                 }
 
-                                // Text field for non-Ollama or when no models discovered
-                                DankTextField {
-                                    visible: aiService.provider !== "ollama" || aiService.availableModels.count === 0
+                                // Text field for non-Ollama or no models — accordion
+                                Item {
                                     width: parent.width
-                                    text: aiService.model
-                                    placeholderText: {
-                                        switch (aiService.provider) {
-                                        case "openai": return "gpt-4o";
-                                        case "anthropic": return "claude-sonnet-4-5";
-                                        case "gemini": return "gemini-2.5-flash";
-                                        default: return "model-name";
+                                    height: (aiService.provider !== "ollama" || aiService.availableModels.count === 0) ? modelTextField.implicitHeight : 0
+                                    clip: true
+                                    Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+
+                                    DankTextField {
+                                        id: modelTextField
+                                        width: parent.width
+                                        text: aiService.model
+                                        placeholderText: {
+                                            switch (aiService.provider) {
+                                            case "openai": return "gpt-4o";
+                                            case "anthropic": return "claude-sonnet-4-5";
+                                            case "gemini": return "gemini-2.5-flash";
+                                            default: return "model-name";
+                                            }
                                         }
-                                    }
-                                    onEditingFinished: {
-                                        aiService.model = text.trim();
-                                        aiService.saveSettingValue("model", text.trim());
+                                        onEditingFinished: {
+                                            aiService.model = text.trim();
+                                            aiService.saveSettingValue("model", text.trim());
+                                        }
                                     }
                                 }
 
-                                // Refresh models button (Ollama only)
-                                DankButton {
-                                    visible: aiService.provider === "ollama"
-                                    text: "Refresh Models"
-                                    iconName: "refresh"
+                                // Refresh models button — accordion (Ollama only)
+                                Item {
                                     width: parent.width
-                                    enabled: aiService.ollamaReady
-                                    onClicked: aiService.discoverModels()
+                                    height: aiService.provider === "ollama" ? refreshBtn.implicitHeight : 0
+                                    clip: true
+                                    Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+
+                                    DankButton {
+                                        id: refreshBtn
+                                        text: "Refresh Models"
+                                        iconName: "refresh"
+                                        width: parent.width
+                                        enabled: aiService.ollamaReady
+                                        onClicked: aiService.discoverModels()
+                                    }
                                 }
                             }
                         }
                     }
 
-                    // ── Card 2: Model Parameters ─────────────────────────
+                    // -- Card 2: Model Parameters --
                     Rectangle {
                         width: parent.width
                         height: paramsContent.height + Theme.spacingL * 2
@@ -417,7 +460,7 @@ Item {
                         }
                     }
 
-                    // ── Card 3: API Keys (info only) ─────────────────────
+                    // -- Card 3: API Keys (info only) --
                     Rectangle {
                         width: parent.width
                         height: keysContent.height + Theme.spacingL * 2

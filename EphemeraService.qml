@@ -26,7 +26,7 @@ Item {
     property real temperature: 0.7
     property int maxTokens: 4096
     property int maxTurns: 10
-    property int timeout: 30
+    property int timeout: 300
     property string systemPrompt: ""
 
     // --- Ollama state ---
@@ -51,11 +51,31 @@ Item {
         }
     }
 
+    function shutdownOllama() {
+        if (ollamaWeStarted && ollamaProcess.running) {
+            ollamaProcess.running = false;
+        }
+        ollamaWeStarted = false;
+        ollamaReady = false;
+    }
+
+    function forceShutdownExternalOllama() {
+        ollamaKiller.running = true;
+        ollamaReady = false;
+        ollamaExternallyManaged = false;
+    }
+
     // ─── Ollama lifecycle ───────────────────────────────────────────
 
     Process {
         id: ollamaProcess
         command: ["ollama", "serve"]
+        running: false
+    }
+
+    Process {
+        id: ollamaKiller
+        command: ["pkill", "ollama"]
         running: false
     }
 
@@ -269,6 +289,7 @@ Item {
         streamCollector.lastLen = 0;
         streamBuffer = "";
         pendingStdinBody = result.body;
+        chatFetcher.stdinEnabled = true; // Re-enable before each request
         chatFetcher.command = result.cmd;
         chatFetcher.running = true;
     }
@@ -380,8 +401,13 @@ Item {
                 // OpenAI / Ollama (OpenAI-compat)
                 var choices = data.choices;
                 if (choices && choices[0] && choices[0].delta) {
-                    var content = choices[0].delta.content;
-                    if (typeof content === "string")
+                    var d = choices[0].delta;
+                    // Show reasoning/thinking tokens (e.g. Qwen3, DeepSeek) while they stream
+                    var reasoning = d.reasoning_content || d.reasoning || "";
+                    var content = d.content || "";
+                    if (reasoning)
+                        updateStreamContent(activeStreamId, reasoning);
+                    if (content)
                         updateStreamContent(activeStreamId, content);
                 }
                 if (choices && choices[0] && choices[0].finish_reason)
@@ -526,7 +552,7 @@ Item {
         onRunningChanged: {
             if (running && root.pendingStdinBody) {
                 chatFetcher.write(root.pendingStdinBody);
-                chatFetcher.closeStdin();
+                chatFetcher.stdinEnabled = false; // Signal EOF to curl
                 root.pendingStdinBody = "";
             }
         }

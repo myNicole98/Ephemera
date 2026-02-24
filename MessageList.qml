@@ -9,6 +9,11 @@ Item {
     property bool stickToBottom: true
     property string modelName: "Assistant"
 
+    function scrollToBottom() {
+        stickToBottom = true;
+        listView.positionViewAtEnd();
+    }
+
     Connections {
         target: root.messages
         function onCountChanged() {
@@ -21,7 +26,10 @@ Item {
     ListView {
         id: listView
         anchors.fill: parent
-        anchors.margins: Theme.spacingS
+        anchors.leftMargin: Theme.spacingS
+        anchors.rightMargin: Theme.spacingS
+        anchors.bottomMargin: Theme.spacingS
+        anchors.topMargin: Theme.spacingL
         model: root.messages
         spacing: Theme.spacingM
         clip: true
@@ -48,10 +56,26 @@ Item {
 
             implicitHeight: bubble.implicitHeight + topGap
 
+            // Materialization properties
+            property real _entryOffset: 8
+            opacity: 0
+            scale: 0.97
+            transformOrigin: Item.Bottom
+
+            Behavior on opacity { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
+            Behavior on scale { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
+            Behavior on _entryOffset { NumberAnimation { duration: 280; easing.type: Easing.OutCubic } }
+
+            Component.onCompleted: {
+                opacity = 1;
+                scale = 1.0;
+                _entryOffset = 0;
+            }
+
             MessageBubble {
                 id: bubble
                 width: listView.width
-                y: wrapper.topGap
+                y: wrapper.topGap + wrapper._entryOffset
                 role: model.role
                 text: model.content
                 status: model.status
