@@ -1,0 +1,18 @@
+{
+  "id": "ephemera",
+  "name": "Ephemera",
+  "description": "Ephemeral AI chat — ask quick questions, keep nothing",
+  "version": "0.1.0",
+  "author": "nicolasgarcia214",
+  "type": "daemon",
+  "capabilities": [
+    "slideout",
+    "ai"
+  ],
+  "component": "./EphemeraDaemon.qml",
+  "icon": "chat_bubble",
+  "permissions": [
+    "settings_read",
+    "settings_write"
+  ]
+}
