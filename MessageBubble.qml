@@ -14,6 +14,10 @@ Item {
     property bool thinkingExpanded: false
     property string status: "ok" // ok|streaming|error
     property string modelName: "Assistant"
+    property bool expanded: false
+    property bool isLastAssistant: false
+    property bool canRegenerate: false
+    signal regenerateRequested
 
     readonly property bool isUser: role === "user"
     readonly property real bubbleMaxWidth: isUser ? Math.max(240, Math.floor(width * 0.82)) : width
@@ -30,21 +34,46 @@ Item {
     })
 
     readonly property bool useMarkdownRendering: !isUser && status !== "streaming"
-    readonly property string renderedHtml: Markdown.markdownToHtml(root.text, themeColors)
+    property string renderedHtml: ""
+    property string _lastRenderedText: ""
+
+    function _updateRenderedHtml() {
+        if (!isUser && root.text !== _lastRenderedText) {
+            renderedHtml = Markdown.markdownToHtml(root.text, themeColors);
+            _lastRenderedText = root.text;
+        }
+    }
+
+    onStatusChanged: {
+        if (status === "ok" || status === "error")
+            _updateRenderedHtml();
+        if (status === "error") shakeAnim.start();
+    }
 
     onTextChanged: {
         if (status === "streaming" && thinking.length > 0 && text.length > 0 && thinkingExpanded) {
             thinkingExpanded = false;
         }
+        // Re-render if text changes while already in a terminal state
+        if (status === "ok" || status === "error")
+            _updateRenderedHtml();
     }
-    onThinkingChanged: {
-        if (thinkingExpanded) {
-            Qt.callLater(function() {
-                if (thinkingFlickable.contentHeight > thinkingFlickable.height) {
-                    thinkingFlickable.contentY = thinkingFlickable.contentHeight - thinkingFlickable.height;
-                }
-            });
+
+    // Debounced thinking scroll
+    Timer {
+        id: thinkingScrollTimer
+        interval: 100
+        repeat: false
+        onTriggered: {
+            if (thinkingFlickable.contentHeight > thinkingFlickable.height) {
+                thinkingFlickable.contentY = thinkingFlickable.contentHeight - thinkingFlickable.height;
+            }
         }
+    }
+
+    onThinkingChanged: {
+        if (thinkingExpanded)
+            thinkingScrollTimer.restart();
     }
 
     width: parent ? parent.width : implicitWidth
@@ -63,10 +92,6 @@ Item {
             NumberAnimation { to: 3; duration: 50; easing.type: Easing.InOutQuad }
             NumberAnimation { to: 0; duration: 50; easing.type: Easing.OutQuad }
         }
-    }
-
-    onStatusChanged: {
-        if (status === "error") shakeAnim.start();
     }
 
     Rectangle {
@@ -126,8 +151,12 @@ Item {
                     radius: Theme.cornerRadius
                     color: root.isUser ? Theme.withAlpha(Theme.primary, 0.14) : Theme.surfaceVariant
                     Layout.preferredHeight: Theme.fontSizeSmall * 1.6
-                    Layout.preferredWidth: Math.min(headerText.implicitWidth + Theme.spacingS * 2, 160)
+                    Layout.preferredWidth: Math.min(headerText.implicitWidth + Theme.spacingS * 2, root.expanded ? 320 : 160)
                     clip: true
+
+                    Behavior on Layout.preferredWidth {
+                        NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+                    }
 
                     StyledText {
                         id: headerText
@@ -162,17 +191,43 @@ Item {
                 Item { Layout.fillWidth: !root.isUser }
 
                 DankActionButton {
+                    id: copyBtn
                     visible: !root.isUser && root.status === "ok"
                     opacity: hoverHandler.hovered ? 1.0 : 0.0
-                    iconName: "content_copy"
+                    iconName: _copied ? "check" : "content_copy"
+                    buttonSize: 24
+                    iconSize: 14
+                    backgroundColor: "transparent"
+                    iconColor: _copied ? Theme.success : Theme.surfaceVariantText
+                    tooltipText: _copied ? "Copied!" : "Copy"
+                    property bool _copied: false
+                    onClicked: {
+                        Quickshell.execDetached(["wl-copy", root.text]);
+                        _copied = true;
+                        copyResetTimer.start();
+                    }
+
+                    Timer {
+                        id: copyResetTimer
+                        interval: 1500
+                        onTriggered: copyBtn._copied = false
+                    }
+
+                    Behavior on opacity {
+                        NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
+                    }
+                }
+
+                DankActionButton {
+                    visible: !root.isUser && root.isLastAssistant && root.canRegenerate && root.status !== "streaming"
+                    opacity: hoverHandler.hovered ? 1.0 : 0.0
+                    iconName: "refresh"
                     buttonSize: 24
                     iconSize: 14
                     backgroundColor: "transparent"
                     iconColor: Theme.surfaceVariantText
-                    tooltipText: "Copy"
-                    onClicked: {
-                        Quickshell.execDetached(["wl-copy", root.text]);
-                    }
+                    tooltipText: "Regenerate"
+                    onClicked: root.regenerateRequested()
 
                     Behavior on opacity {
                         NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
@@ -261,9 +316,16 @@ Item {
                 Rectangle {
                     width: parent.width
                     height: 1
-                    color: Theme.withAlpha(Theme.outline, 0.10)
+                    color: Theme.withAlpha(Theme.outline, 0.25)
                     visible: root.thinkingExpanded
                 }
+            }
+
+            // Extra spacing between thinking and content
+            Item {
+                width: parent.width
+                height: Theme.spacingM
+                visible: root.thinking.length > 0
             }
 
             StyledText {
@@ -308,6 +370,10 @@ Item {
                 height: visible ? streamingRow.height : 0
                 x: root.isUser ? (parent.width - width) : 0
 
+                // Thinking phase: thinking exists but no content yet
+                readonly property bool isThinkingPhase: root.thinking.length > 0 && root.text.length === 0
+                readonly property color dotColor: isThinkingPhase ? Theme.tertiary : Theme.primary
+
                 Row {
                     id: streamingRow
                     spacing: 6
@@ -317,7 +383,7 @@ Item {
                         visible: root.thinking.length > 0
                         name: "psychology"
                         size: 16
-                        color: Theme.primary
+                        color: parent.parent.dotColor
                         anchors.verticalCenter: parent.verticalCenter
                         opacity: root.thinkingExpanded ? 0.5 : 1.0
 
@@ -332,7 +398,7 @@ Item {
                             width: 7
                             height: 7
                             radius: 3.5
-                            color: Theme.primary
+                            color: streamingRow.parent.dotColor
                             opacity: 0.4
                             scale: 1.0
                             anchors.verticalCenter: parent.verticalCenter

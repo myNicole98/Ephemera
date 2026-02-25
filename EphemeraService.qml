@@ -13,7 +13,10 @@ Item {
     // --- Message state (in-memory only, never persisted) ---
     property ListModel messagesModel: ListModel {}
     property int messageCount: messagesModel.count
+    property var messageIndexMap: ({})
     property bool isStreaming: false
+    property bool lastRequestFailed: false
+    property string discoveryError: ""
     property string activeStreamId: ""
     property string lastUserText: ""
     property int lastHttpStatus: 0
@@ -38,6 +41,9 @@ Item {
     readonly property int ollamaMaxRetries: 5
 
     readonly property bool isOllama: provider === "ollama"
+    readonly property bool needsApiKey: provider !== "ollama"
+    readonly property bool hasApiKey: resolveApiKey().length > 0
+    readonly property bool missingApiKey: needsApiKey && !hasApiKey
 
     Component.onCompleted: {
         loadSettings();
@@ -102,7 +108,9 @@ Item {
                         discoverModels();
                         return;
                     }
-                } catch (e) {}
+                } catch (e) {
+                    console.warn("Ephemera: Ollama ping parse error:", e);
+                }
                 handlePingFailed();
             }
         }
@@ -162,12 +170,16 @@ Item {
                         root.model = availableModels.get(0).name;
                         saveSettingValue("model", root.model);
                     }
-                } catch (e) {}
+                } catch (e) {
+                    console.warn("Ephemera: model discovery parse error:", e);
+                    root.discoveryError = "Failed to parse model list from Ollama.";
+                }
             }
         }
     }
 
     function discoverModels() {
+        discoveryError = "";
         modelDiscovery.command = ["curl", "-s", "--connect-timeout", "2", ollamaUrl + "/api/tags"];
         modelDiscovery.running = true;
     }
@@ -191,6 +203,7 @@ Item {
         temperature = PluginService.loadPluginData(pluginId, "temperature", 0.7);
         maxTokens = PluginService.loadPluginData(pluginId, "maxTokens", 4096);
         maxTurns = PluginService.loadPluginData(pluginId, "maxTurns", 10);
+        timeout = PluginService.loadPluginData(pluginId, "timeout", 300);
         systemPrompt = String(PluginService.loadPluginData(pluginId, "systemPrompt", "")).trim();
 
         // Set baseUrl based on provider
@@ -250,6 +263,7 @@ Item {
 
     function clearChat() {
         messagesModel.clear();
+        messageIndexMap = ({});
         isStreaming = false;
         activeStreamId = "";
         lastUserText = "";
@@ -261,7 +275,33 @@ Item {
             markError(activeStreamId, "Please wait until the current response finishes.");
             return;
         }
+        lastRequestFailed = false;
         startStreaming(text.trim());
+    }
+
+    function regenerate() {
+        if (isStreaming || !lastUserText) return;
+        // Remove last assistant message
+        if (messagesModel.count > 0) {
+            var last = messagesModel.get(messagesModel.count - 1);
+            if (last.role === "assistant") {
+                delete messageIndexMap[last.id];
+                messagesModel.remove(messagesModel.count - 1);
+            }
+        }
+        lastRequestFailed = false;
+        startStreaming(lastUserText);
+    }
+
+    function exportConversation() {
+        var lines = [];
+        for (var i = 0; i < messagesModel.count; i++) {
+            var m = messagesModel.get(i);
+            var label = m.role === "user" ? "You" : "Assistant";
+            lines.push("### " + label + "\n\n" + m.content);
+        }
+        var text = lines.join("\n\n---\n\n");
+        Quickshell.execDetached(["wl-copy", text]);
     }
 
     function cancel() {
@@ -274,10 +314,13 @@ Item {
         var now = Date.now();
         var streamId = "assistant-" + now;
 
-        messagesModel.append({ role: "user", content: text, thinking: "", timestamp: now, id: "user-" + now, status: "ok" });
+        var userId = "user-" + now;
+        messagesModel.append({ role: "user", content: text, thinking: "", timestamp: now, id: userId, status: "ok" });
+        messageIndexMap[userId] = messagesModel.count - 1;
         lastUserText = text;
 
         messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now + 1, id: streamId, status: "streaming" });
+        messageIndexMap[streamId] = messagesModel.count - 1;
         activeStreamId = streamId;
         isStreaming = true;
         lastHttpStatus = 0;
@@ -476,7 +519,8 @@ Item {
                     finalizeStream(activeStreamId);
             }
         } catch (e) {
-            // Ignore malformed chunks
+            // Malformed chunk — log but don't break streaming
+            console.warn("Ephemera: stream chunk parse error:", e);
         }
     }
 
@@ -502,7 +546,7 @@ Item {
         }
 
         if (lastHttpStatus >= 400 && isStreaming) {
-            var preview = bodyText.length > 600 ? bodyText.slice(0, 600) : bodyText;
+            var preview = bodyText.length > 600 ? bodyText.slice(0, 600) + "\u2026" : bodyText;
             var msg = preview
                 ? ("Request failed (HTTP " + lastHttpStatus + "): " + preview)
                 : ("Request failed (HTTP " + lastHttpStatus + ")");
@@ -550,18 +594,16 @@ Item {
                 if (typeof choices[0].text === "string")
                     return choices[0].text;
             }
-        } catch (e) {}
+        } catch (e) {
+            console.warn("Ephemera: non-streaming response parse error:", e);
+        }
         return "";
     }
 
     // ─── Message helpers ───────────────────────────────────────────
 
     function findIndexById(msgId) {
-        for (var i = 0; i < messagesModel.count; i++) {
-            if (messagesModel.get(i).id === msgId)
-                return i;
-        }
-        return -1;
+        return messageIndexMap[msgId] !== undefined ? messageIndexMap[msgId] : -1;
     }
 
     function markError(streamId, message) {
@@ -572,6 +614,7 @@ Item {
         }
         isStreaming = false;
         activeStreamId = "";
+        lastRequestFailed = true;
     }
 
     function updateStreamContent(streamId, deltaText) {
@@ -645,6 +688,12 @@ Item {
             property int lastLen: 0
 
             onTextChanged: {
+                // Cap buffer at ~10MB to prevent memory exhaustion from rogue endpoints
+                if (text.length > 10485760) {
+                    chatFetcher.running = false;
+                    root.markError(root.activeStreamId, "Response exceeded maximum buffer size.");
+                    return;
+                }
                 var newData = text.substring(lastLen);
                 lastLen = text.length;
                 handleStreamChunk(newData);

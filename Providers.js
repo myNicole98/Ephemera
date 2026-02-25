@@ -12,6 +12,22 @@ function normalizeBaseUrl(url) {
     return u.endsWith("/") ? u.slice(0, -1) : u;
 }
 
+// Shared helper: separates system messages from conversation messages.
+// Returns { systemText: string, filtered: Array<{role, content}> }
+function extractSystemPrompt(messages) {
+    var systemText = "";
+    var filtered = [];
+    for (var i = 0; i < messages.length; i++) {
+        var m = messages[i];
+        if (m.role === "system") {
+            systemText = m.content;
+        } else {
+            filtered.push(m);
+        }
+    }
+    return { systemText: systemText, filtered: filtered };
+}
+
 function openaiChatCompletionsUrl(baseUrl) {
     var b = normalizeBaseUrl(baseUrl || "https://api.openai.com");
     if (/\/v\d+$/.test(b))
@@ -98,18 +114,14 @@ function anthropicRequest(payload, apiKey) {
     ];
 
     // Extract system prompt from messages if present
-    var systemText = "";
+    var extracted = extractSystemPrompt(payload.messages);
     var filteredMessages = [];
-    for (var i = 0; i < payload.messages.length; i++) {
-        var m = payload.messages[i];
-        if (m.role === "system") {
-            systemText = m.content;
-        } else {
-            filteredMessages.push({
-                role: m.role === "assistant" ? "assistant" : "user",
-                content: m.content
-            });
-        }
+    for (var i = 0; i < extracted.filtered.length; i++) {
+        var m = extracted.filtered[i];
+        filteredMessages.push({
+            role: m.role === "assistant" ? "assistant" : "user",
+            content: m.content
+        });
     }
 
     var body = {
@@ -119,8 +131,8 @@ function anthropicRequest(payload, apiKey) {
         temperature: payload.temperature || 0.7,
         stream: true
     };
-    if (systemText)
-        body.system = systemText;
+    if (extracted.systemText)
+        body.system = extracted.systemText;
 
     return { url: url, headers: headers, body: JSON.stringify(body) };
 }
@@ -133,18 +145,14 @@ function geminiRequest(payload, apiKey) {
     var headers = ["-H", "x-goog-api-key: " + apiKey];
 
     // Extract system prompt
-    var systemText = "";
+    var extracted = extractSystemPrompt(payload.messages);
     var contents = [];
-    for (var i = 0; i < payload.messages.length; i++) {
-        var m = payload.messages[i];
-        if (m.role === "system") {
-            systemText = m.content;
-        } else {
-            contents.push({
-                role: m.role === "user" ? "user" : "model",
-                parts: [{ text: m.content }]
-            });
-        }
+    for (var i = 0; i < extracted.filtered.length; i++) {
+        var m = extracted.filtered[i];
+        contents.push({
+            role: m.role === "user" ? "user" : "model",
+            parts: [{ text: m.content }]
+        });
     }
 
     var body = {
@@ -154,8 +162,8 @@ function geminiRequest(payload, apiKey) {
             maxOutputTokens: payload.max_tokens || 4096
         }
     };
-    if (systemText)
-        body.system_instruction = { parts: [{ text: systemText }] };
+    if (extracted.systemText)
+        body.system_instruction = { parts: [{ text: extracted.systemText }] };
 
     return { url: url, headers: headers, body: JSON.stringify(body) };
 }

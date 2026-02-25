@@ -91,10 +91,22 @@ Item {
             Rectangle {
                 id: providerPill
                 radius: Theme.cornerRadius
-                color: _flashing ? Theme.withAlpha(Theme.primary, 0.3) : Theme.surfaceVariant
+                color: {
+                    if (aiService.missingApiKey || aiService.lastRequestFailed)
+                        return Theme.withAlpha(Theme.error, 0.15);
+                    if (_flashing)
+                        return Theme.withAlpha(Theme.primary, 0.3);
+                    return Theme.surfaceVariant;
+                }
+                border.color: (aiService.missingApiKey || aiService.lastRequestFailed) ? Theme.withAlpha(Theme.error, 0.4) : "transparent"
+                border.width: (aiService.missingApiKey || aiService.lastRequestFailed) ? 1 : 0
                 height: Theme.fontSizeSmall * 1.6
-                Layout.preferredWidth: 160
+                Layout.preferredWidth: root.slideoutExpanded ? 320 : 160
                 Layout.alignment: Qt.AlignVCenter
+
+                Behavior on Layout.preferredWidth {
+                    NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+                }
                 clip: true
 
                 property bool _flashing: false
@@ -115,7 +127,7 @@ Item {
                     width: parent.width - Theme.spacingS * 2
                     text: root.displayModel
                     font.pixelSize: Theme.fontSizeSmall
-                    color: Theme.surfaceVariantText
+                    color: (aiService.missingApiKey || aiService.lastRequestFailed) ? Theme.error : Theme.surfaceVariantText
                     wrapMode: Text.NoWrap
                     elide: Text.ElideRight
                     horizontalAlignment: Text.AlignHCenter
@@ -136,6 +148,13 @@ Item {
                     if (showSettings) closeSettings();
                     else showSettings = true;
                 }
+            }
+
+            DankActionButton {
+                iconName: "content_copy"
+                tooltipText: "Copy conversation"
+                enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
+                onClicked: aiService.exportConversation()
             }
 
             DankActionButton {
@@ -185,6 +204,9 @@ Item {
                 anchors.fill: parent
                 messages: aiService.messagesModel
                 modelName: aiService.model || "Assistant"
+                expanded: root.slideoutExpanded
+                canRegenerate: !aiService.isStreaming && aiService.lastUserText.length > 0
+                onRegenerateRequested: aiService.regenerate()
             }
 
             // Breathing empty state
@@ -381,9 +403,9 @@ Item {
                 StyledText {
                     anchors.fill: parent
                     anchors.margins: Theme.spacingM
-                    text: "Ask something\u2026"
+                    text: aiService.missingApiKey ? "API key required \u2014 set env var" : "Ask something\u2026  (Shift+Enter for newline)"
                     font.pixelSize: Theme.fontSizeMedium
-                    color: Theme.outlineButton
+                    color: aiService.missingApiKey ? Theme.error : Theme.outlineButton
                     verticalAlignment: Text.AlignTop
                     visible: composer.text.length === 0
                     wrapMode: Text.Wrap
@@ -406,7 +428,7 @@ Item {
                     backgroundColor: Theme.primary
                     iconColor: Theme.onPrimary
                     tooltipText: "Send"
-                    enabled: composer.text && composer.text.trim().length > 0 && !aiService.isStreaming
+                    enabled: composer.text && composer.text.trim().length > 0 && !aiService.isStreaming && !aiService.missingApiKey
                     opacity: aiService.isStreaming ? 0.0 : 1.0
                     scale: aiService.isStreaming ? 0.6 : 1.0
                     visible: opacity > 0

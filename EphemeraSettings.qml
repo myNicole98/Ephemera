@@ -168,12 +168,15 @@ Item {
                                             color: Theme.surfaceVariantText
                                         }
                                         DankTextField {
+                                            id: customUrlField
                                             width: parent.width
                                             text: aiService.baseUrl
                                             placeholderText: "https://api.openai.com"
                                             onEditingFinished: {
-                                                aiService.baseUrl = text.trim();
-                                                aiService.saveSettingValue("customBaseUrl", text.trim());
+                                                var url = text.trim();
+                                                if (url && !/^https?:\/\//i.test(url)) return;
+                                                aiService.baseUrl = url;
+                                                aiService.saveSettingValue("customBaseUrl", url);
                                             }
                                         }
                                     }
@@ -301,6 +304,23 @@ Item {
                                     text: "System Prompt"
                                     font.pixelSize: Theme.fontSizeSmall
                                     color: Theme.surfaceVariantText
+                                }
+                                DankDropdown {
+                                    width: parent.width
+                                    options: ["(custom)", "Concise", "Code Expert", "Translator", "Writing Editor"]
+                                    currentValue: "(custom)"
+                                    onValueChanged: value => {
+                                        var presets = {
+                                            "Concise": "Be concise. Answer in as few words as possible while remaining helpful and accurate.",
+                                            "Code Expert": "You are an expert programmer. Provide clean, well-structured code with brief explanations. Prefer practical solutions.",
+                                            "Translator": "You are a translator. Translate the user's text to the target language they specify. If no language is specified, translate to English.",
+                                            "Writing Editor": "You are a writing editor. Improve clarity, grammar, and flow while preserving the author's voice and intent."
+                                        };
+                                        if (presets[value]) {
+                                            aiService.systemPrompt = presets[value];
+                                            aiService.saveSettingValue("systemPrompt", presets[value]);
+                                        }
+                                    }
                                 }
                                 DankTextField {
                                     width: parent.width
@@ -448,12 +468,61 @@ Item {
                                     width: parent.width
                                     height: 32
                                     minimum: 2
-                                    maximum: 40
+                                    maximum: 100
                                     value: aiService.maxTurns
                                     showValue: false
                                     onSliderValueChanged: newValue => {
                                         aiService.maxTurns = newValue;
                                         aiService.saveSettingValue("maxTurns", newValue);
+                                    }
+                                }
+
+                                // Request Timeout
+                                Item { width: 1; height: Theme.spacingXS }
+                                Row {
+                                    width: parent.width
+                                    spacing: Theme.spacingM
+
+                                    DankIcon {
+                                        name: "timer"
+                                        size: Theme.iconSize
+                                        color: Theme.primary
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+
+                                    Column {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        spacing: Theme.spacingXS
+                                        width: parent.width - parent.spacing - Theme.iconSize
+
+                                        StyledText {
+                                            text: "Request Timeout: " + aiService.timeout + "s"
+                                            font.pixelSize: Theme.fontSizeMedium
+                                            font.weight: Font.Medium
+                                            color: Theme.surfaceText
+                                        }
+
+                                        StyledText {
+                                            text: "Max time for a streaming response"
+                                            font.pixelSize: Theme.fontSizeSmall
+                                            color: Theme.surfaceVariantText
+                                            wrapMode: Text.WordWrap
+                                            width: parent.width
+                                        }
+                                    }
+                                }
+
+                                DankSlider {
+                                    width: parent.width
+                                    height: 32
+                                    minimum: 30
+                                    maximum: 600
+                                    step: 30
+                                    value: aiService.timeout
+                                    showValue: false
+                                    onSliderValueChanged: newValue => {
+                                        aiService.timeout = newValue;
+                                        aiService.saveSettingValue("timeout", newValue);
                                     }
                                 }
                             }

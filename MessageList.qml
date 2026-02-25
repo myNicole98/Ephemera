@@ -8,6 +8,9 @@ Item {
     property var messages: null // expects a ListModel
     property bool stickToBottom: true
     property string modelName: "Assistant"
+    property bool expanded: false
+    property bool canRegenerate: false
+    signal regenerateRequested
 
     function scrollToBottom() {
         stickToBottom = true;
@@ -81,6 +84,10 @@ Item {
                 thinking: model.thinking || ""
                 status: model.status
                 modelName: root.modelName
+                expanded: root.expanded
+                isLastAssistant: model.role === "assistant" && index === listView.count - 1
+                canRegenerate: root.canRegenerate
+                onRegenerateRequested: root.regenerateRequested()
             }
         }
     }

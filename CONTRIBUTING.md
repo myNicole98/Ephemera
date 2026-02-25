@@ -18,8 +18,8 @@ ephemera/
 ├── EphemeraChat.qml         # Main UI — header, message area, composer, overlays
 ├── EphemeraSettings.qml     # Settings panel — provider, model, parameters, API key status
 ├── MessageList.qml          # ListView wrapper with auto-scroll and entry animations
-├── MessageBubble.qml        # Individual message rendering (markdown, copy, streaming dots)
-├── Providers.js             # Pure functions — builds provider-specific curl commands
+├── MessageBubble.qml        # Individual message rendering (markdown, copy, regenerate, streaming dots)
+├── Providers.js             # Pure functions — builds provider-specific curl commands (shared extractSystemPrompt helper)
 ├── Markdown.js              # Markdown-to-HTML converter with security hardening
 ├── CLAUDE.md                # AI assistant context file
 └── README.md                # User-facing documentation
@@ -32,10 +32,11 @@ EphemeraDaemon (entry point)
 │
 ├─ EphemeraService (singleton)
 │  ├─ Message ListModel (in-memory, never persisted)
+│  ├─ messageIndexMap (O(1) message lookups by ID)
 │  ├─ Provider settings (persisted via PluginService)
 │  ├─ Ollama lifecycle (ping → auto-start → discover models)
-│  ├─ Curl process (stdin body, SSE streaming)
-│  └─ Providers.js (curl command builders per provider)
+│  ├─ Curl process (stdin body, SSE streaming, 10MB buffer cap)
+│  └─ Providers.js (curl command builders per provider, shared extractSystemPrompt)
 │
 └─ Variants (one per screen)
    └─ DankSlideout
@@ -138,18 +139,26 @@ ollama serve &
 ### What to verify after changes
 
 - Messages appear with entry animation (fade + scale)
-- Streaming shows pulsing dots, then renders markdown when done
-- Copy button appears on hover over assistant messages
+- Streaming shows pulsing dots (tertiary color during thinking, primary during generating), then renders markdown when done
+- Copy button appears on hover over assistant messages; shows checkmark feedback for 1.5s
+- Regenerate button appears on hover over the last assistant message
 - Error messages trigger a shake animation
 - Composer grows/shrinks as text is typed (44–160px)
+- Send button disabled and placeholder turns red when API key is missing
 - Send/stop buttons crossfade during streaming
 - Empty state shows breathing vapor animation
 - Scroll-to-bottom pill appears when scrolled up
 - Settings panel fades in/out, accordion fields animate
-- Provider pill in header truncates long names with ellipsis
+- System prompt presets dropdown works and populates the text field
+- Request timeout slider saves and persists
+- Provider pill in header truncates long names with ellipsis; turns red when API key missing or last request failed
+- Provider pill and model chips in message bubbles expand when slideout is expanded
+- Thinking section has clear visual separation from content (spacing + divider)
+- Export button in header copies full conversation as markdown
 - Close button handles Ollama shutdown (auto-stop if plugin started it, dialog if external)
 - Escape key triggers close flow (same as close button)
 - Expand/collapse button works on the slideout
+- Custom base URLs are validated (http/https only)
 
 ## Quickshell QML constraints
 
@@ -253,10 +262,12 @@ These are non-negotiable design decisions:
 - **Link scheme whitelist.** Only `http://` and `https://` links are opened. No `file://`, `javascript:`, or other schemes.
 - **HTML escaping in Markdown.js.** All user content is escaped before rendering as rich text. Code blocks, table cells, and language labels are all escaped independently.
 - **Gemini API key as header** (`x-goog-api-key`), not as a URL query parameter.
+- **Custom URL validation.** Custom base URLs must start with `http://` or `https://`. Reject anything else.
+- **Stdout buffer cap.** The `StdioCollector` is capped at 10MB. A rogue endpoint cannot exhaust memory.
 
 ## Adding a new provider
 
-1. **`Providers.js`** — Add a new `fooRequest(payload, apiKey)` function that returns `{ url, headers, body }`. Add a case in `buildRequest()`.
+1. **`Providers.js`** — Add a new `fooRequest(payload, apiKey)` function that returns `{ url, headers, body }`. Use the shared `extractSystemPrompt(payload.messages)` helper to separate system messages if the provider needs them in a different field. Add a case in `buildRequest()`.
 
 2. **`EphemeraService.qml`** — Add the provider to `resolveApiKey()` (map to env var name) and `updateBaseUrl()` (set default URL). Update `parseProviderDelta()` if the streaming format differs from OpenAI's SSE.
 
