@@ -25,6 +25,7 @@ Item {
             _settingsClosing = false;
         } else {
             if (aiService) aiService.ensureOllamaReady();
+            Qt.callLater(function() { composer.forceActiveFocus(); });
         }
     }
 

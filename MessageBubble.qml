@@ -181,10 +181,14 @@ Item {
             }
 
             // Header-content separator
-            Rectangle {
+            Item {
                 width: parent.width
-                height: 1
-                color: Theme.withAlpha(Theme.outline, 0.15)
+                implicitHeight: 1 + Theme.spacingXS
+                Rectangle {
+                    width: parent.width
+                    height: 1
+                    color: Theme.withAlpha(Theme.outline, 0.15)
+                }
             }
 
             // Thinking section (only visible when thinking exists)

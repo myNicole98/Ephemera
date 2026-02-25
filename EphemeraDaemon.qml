@@ -2,7 +2,6 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Common
-import qs.Widgets
 import qs.Services
 import "."
 
@@ -36,20 +35,20 @@ Item {
         id: variants
         model: Quickshell.screens
 
-        delegate: DankSlideout {
-            id: slideout
+        delegate: EphemeraPanel {
+            id: panel
             required property var modelData
-            title: ""
-            slideoutWidth: 480
+            panelWidth: 480
             expandable: true
-            expandedWidthValue: 960
+            expandedWidth: 960
+            gap: 6
 
             content: EphemeraChat {
                 aiService: ephemeraService
-                slideoutExpandable: slideout.expandable
-                slideoutExpanded: slideout.expandedWidth
-                onExpandToggled: slideout.expandedWidth = !slideout.expandedWidth
-                onHideRequested: slideout.hide()
+                slideoutExpandable: panel.expandable
+                slideoutExpanded: panel.expanded
+                onExpandToggled: panel.expanded = !panel.expanded
+                onHideRequested: panel.hide()
             }
         }
     }
