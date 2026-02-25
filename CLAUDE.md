@@ -27,14 +27,15 @@ The plugin depends on shared QML modules from the parent config:
 - `EphemeraChat.qml` — main chat view with header, message area, and composer; loads `EphemeraSettings` as an overlay
 - `EphemeraSettings.qml` — settings panel for provider, model, temperature, max tokens, context turns, system prompt
 - `MessageList.qml` — `ListView` wrapper with auto-scroll-to-bottom behavior
-- `MessageBubble.qml` — renders user/assistant messages; assistant messages use rich-text HTML via `Markdown.js` when not actively streaming
+- `MessageBubble.qml` — renders user/assistant messages; assistant messages use rich-text HTML via `Markdown.js` when not actively streaming; includes a collapsible "Thinking" section for reasoning content
 
 **Markdown rendering:** `Markdown.js` — converts markdown to Qt-compatible HTML with security hardening (HTML escaping, link scheme whitelist to http/https only).
 
 ## Key Design Decisions
 
 - **API keys from env vars only:** `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `EPHEMERA_API_KEY` (for custom). Never stored on disk. `EphemeraSettings` displays detection status but provides no input fields for keys.
-- **Ollama auto-lifecycle:** On startup, pings Ollama; if unreachable, attempts `ollama serve` and retries up to 5 times. Tracks whether Ollama was externally managed vs. started by the plugin (only stops it on destruction if we started it). Auto-discovers available models via `/api/tags`.
-- **Streaming via SSE:** All providers use Server-Sent Events. `handleStreamChunk` parses the SSE `data:` lines incrementally; `parseProviderDelta` dispatches by provider to extract text deltas. Falls back to non-streaming response parsing if no streamed content was received.
+- **Ollama auto-lifecycle:** On startup, pings Ollama; if unreachable, attempts `ollama serve` and retries up to 5 times. Re-pings each time the panel becomes visible via `ensureOllamaReady()`. Tracks whether Ollama was externally managed vs. started by the plugin (only stops it on destruction if we started it). Auto-discovers available models via `/api/tags`.
+- **Thinking/reasoning content:** Models that emit `<think>...</think>` tags in their content stream (e.g., Qwen3, DeepSeek via Ollama) are detected by `routeContentDelta`, which splits the stream into thinking vs. content. Providers that send explicit `reasoning_content` or `reasoning` fields (DeepSeek via OpenAI-compatible APIs) are handled directly in `parseProviderDelta`. Thinking text is stored in a separate `thinking` property on each message and rendered in a collapsible section in `MessageBubble`.
+- **Streaming via SSE:** All providers use Server-Sent Events. `handleStreamChunk` parses the SSE `data:` lines incrementally; `parseProviderDelta` dispatches by provider to extract text deltas. Content deltas are routed through `routeContentDelta` for `<think>` tag detection. Falls back to non-streaming response parsing if no streamed content was received.
 - **Sliding context window:** `buildPayload` collects the last N user turns (configurable via `maxTurns`) from the in-memory model to send as conversation history.
 - **Copy uses `wl-copy`:** Wayland-only clipboard via `Quickshell.execDetached(["wl-copy", ...])`.

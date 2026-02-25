@@ -78,6 +78,7 @@ Item {
                 y: wrapper.topGap + wrapper._entryOffset
                 role: model.role
                 text: model.content
+                thinking: model.thinking || ""
                 status: model.status
                 modelName: root.modelName
             }

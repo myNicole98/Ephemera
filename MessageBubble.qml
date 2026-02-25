@@ -10,6 +10,8 @@ Item {
     id: root
     property string role: "assistant"
     property string text: ""
+    property string thinking: ""
+    property bool thinkingExpanded: false
     property string status: "ok" // ok|streaming|error
     property string modelName: "Assistant"
 
@@ -29,6 +31,21 @@ Item {
 
     readonly property bool useMarkdownRendering: !isUser && status !== "streaming"
     readonly property string renderedHtml: Markdown.markdownToHtml(root.text, themeColors)
+
+    onTextChanged: {
+        if (status === "streaming" && thinking.length > 0 && text.length > 0 && thinkingExpanded) {
+            thinkingExpanded = false;
+        }
+    }
+    onThinkingChanged: {
+        if (thinkingExpanded) {
+            Qt.callLater(function() {
+                if (thinkingFlickable.contentHeight > thinkingFlickable.height) {
+                    thinkingFlickable.contentY = thinkingFlickable.contentHeight - thinkingFlickable.height;
+                }
+            });
+        }
+    }
 
     width: parent ? parent.width : implicitWidth
     implicitHeight: bubble.implicitHeight
@@ -80,6 +97,15 @@ Item {
 
         HoverHandler {
             id: hoverHandler
+        }
+
+        // Click anywhere on bubble to toggle thinking during streaming
+        MouseArea {
+            anchors.fill: parent
+            enabled: root.status === "streaming" && root.thinking.length > 0
+            visible: enabled
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.thinkingExpanded = !root.thinkingExpanded
         }
 
         Column {
@@ -161,6 +187,81 @@ Item {
                 color: Theme.withAlpha(Theme.outline, 0.15)
             }
 
+            // Thinking section (only visible when thinking exists)
+            Column {
+                width: parent.width
+                visible: root.thinking.length > 0
+                spacing: Theme.spacingXS
+
+                MouseArea {
+                    width: parent.width
+                    height: thinkingHeader.implicitHeight
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.thinkingExpanded = !root.thinkingExpanded
+
+                    Row {
+                        id: thinkingHeader
+                        spacing: Theme.spacingXS
+
+                        DankIcon {
+                            name: "psychology"
+                            size: 14
+                            color: Theme.primary
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        DankIcon {
+                            name: root.thinkingExpanded ? "expand_more" : "chevron_right"
+                            size: 14
+                            color: Theme.surfaceTextMedium
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        StyledText {
+                            text: "Thinking" + (root.status === "streaming" && root.text.length === 0 ? "..." : "")
+                            font.pixelSize: Theme.fontSizeSmall
+                            font.weight: Font.Medium
+                            color: Theme.surfaceTextMedium
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+                }
+
+                Flickable {
+                    id: thinkingFlickable
+                    visible: root.thinkingExpanded
+                    width: parent.width
+                    height: Math.min(contentHeight, 200)
+                    contentHeight: thinkingTextArea.implicitHeight
+                    clip: true
+                    flickableDirection: Flickable.VerticalFlick
+
+                    TextArea {
+                        id: thinkingTextArea
+                        width: thinkingFlickable.width
+                        text: root.thinking
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceTextMedium
+                        readOnly: true
+                        selectByMouse: true
+                        background: null
+                        leftPadding: 4
+                        rightPadding: 4
+                    }
+
+                    ScrollBar.vertical: ScrollBar {}
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 1
+                    color: Theme.withAlpha(Theme.outline, 0.10)
+                    visible: root.thinkingExpanded
+                }
+            }
+
             StyledText {
                 visible: root.status === "error"
                 text: "Error"
@@ -196,40 +297,67 @@ Item {
                 hoverEnabled: true
             }
 
-            // Pulsing streaming dots
-            Row {
+            // Pulsing streaming dots (clickable to toggle thinking)
+            Item {
                 visible: status === "streaming"
-                spacing: 6
-                height: visible ? Theme.fontSizeSmall * 1.6 : 0
+                width: streamingRow.width
+                height: visible ? streamingRow.height : 0
                 x: root.isUser ? (parent.width - width) : 0
 
-                Repeater {
-                    model: 3
-                    Rectangle {
-                        id: dot
-                        width: 7
-                        height: 7
-                        radius: 3.5
+                Row {
+                    id: streamingRow
+                    spacing: 6
+                    height: Theme.fontSizeSmall * 1.6
+
+                    DankIcon {
+                        visible: root.thinking.length > 0
+                        name: "psychology"
+                        size: 16
                         color: Theme.primary
-                        opacity: 0.4
-                        scale: 1.0
                         anchors.verticalCenter: parent.verticalCenter
+                        opacity: root.thinkingExpanded ? 0.5 : 1.0
 
-                        SequentialAnimation on opacity {
-                            loops: Animation.Infinite
-                            PauseAnimation { duration: index * 160 }
-                            NumberAnimation { to: 1.0; duration: 400; easing.type: Easing.InOutSine }
-                            NumberAnimation { to: 0.4; duration: 400; easing.type: Easing.InOutSine }
-                            PauseAnimation { duration: (2 - index) * 160 }
+                        Behavior on opacity {
+                            NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
                         }
+                    }
 
-                        SequentialAnimation on scale {
-                            loops: Animation.Infinite
-                            PauseAnimation { duration: index * 160 }
-                            NumberAnimation { to: 1.4; duration: 400; easing.type: Easing.InOutSine }
-                            NumberAnimation { to: 1.0; duration: 400; easing.type: Easing.InOutSine }
-                            PauseAnimation { duration: (2 - index) * 160 }
+                    Repeater {
+                        model: 3
+                        Rectangle {
+                            width: 7
+                            height: 7
+                            radius: 3.5
+                            color: Theme.primary
+                            opacity: 0.4
+                            scale: 1.0
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            SequentialAnimation on opacity {
+                                loops: Animation.Infinite
+                                PauseAnimation { duration: index * 160 }
+                                NumberAnimation { to: 1.0; duration: 400; easing.type: Easing.InOutSine }
+                                NumberAnimation { to: 0.4; duration: 400; easing.type: Easing.InOutSine }
+                                PauseAnimation { duration: (2 - index) * 160 }
+                            }
+
+                            SequentialAnimation on scale {
+                                loops: Animation.Infinite
+                                PauseAnimation { duration: index * 160 }
+                                NumberAnimation { to: 1.4; duration: 400; easing.type: Easing.InOutSine }
+                                NumberAnimation { to: 1.0; duration: 400; easing.type: Easing.InOutSine }
+                                PauseAnimation { duration: (2 - index) * 160 }
+                            }
                         }
+                    }
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: root.thinking.length > 0 ? Qt.PointingHandCursor : Qt.ArrowCursor
+                    onClicked: {
+                        if (root.thinking.length > 0)
+                            root.thinkingExpanded = !root.thinkingExpanded;
                     }
                 }
             }

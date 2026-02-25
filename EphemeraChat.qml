@@ -23,6 +23,8 @@ Item {
         if (!visible) {
             showSettings = false;
             _settingsClosing = false;
+        } else {
+            if (aiService) aiService.ensureOllamaReady();
         }
     }
 

@@ -8,7 +8,8 @@ Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plug
 
 - **Multiple providers** — Ollama, OpenAI, Anthropic, Gemini, or any OpenAI-compatible endpoint
 - **Streaming responses** — real-time token-by-token output via SSE
-- **Ollama auto-management** — automatically starts `ollama serve` if not running and discovers available models
+- **Thinking/reasoning display** — collapsible thinking section for models that emit `<think>` tags (Qwen3, DeepSeek via Ollama) or explicit `reasoning_content` fields (DeepSeek via OpenAI-compatible providers)
+- **Ollama auto-management** — automatically starts `ollama serve` if not running, discovers available models, and re-checks connectivity each time the panel opens
 - **Markdown rendering** — assistant responses rendered as rich text with code blocks, tables, lists, and blockquotes
 - **Zero persistence** — messages are never written to disk; API keys are read from environment variables only
 - **Security-first** — request bodies sent via stdin (never in `/proc/cmdline`), API keys passed as headers (not URL params), link scheme restricted to http/https

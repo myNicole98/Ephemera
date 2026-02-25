@@ -65,6 +65,13 @@ Item {
         ollamaExternallyManaged = false;
     }
 
+    function ensureOllamaReady() {
+        if (!isOllama || ollamaReady) return;
+        retryTimer.stop();
+        ollamaRetries = 0;
+        pingOllama();
+    }
+
     // ─── Ollama lifecycle ───────────────────────────────────────────
 
     Process {
@@ -267,10 +274,10 @@ Item {
         var now = Date.now();
         var streamId = "assistant-" + now;
 
-        messagesModel.append({ role: "user", content: text, timestamp: now, id: "user-" + now, status: "ok" });
+        messagesModel.append({ role: "user", content: text, thinking: "", timestamp: now, id: "user-" + now, status: "ok" });
         lastUserText = text;
 
-        messagesModel.append({ role: "assistant", content: "", timestamp: now + 1, id: streamId, status: "streaming" });
+        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now + 1, id: streamId, status: "streaming" });
         activeStreamId = streamId;
         isStreaming = true;
         lastHttpStatus = 0;
@@ -288,6 +295,8 @@ Item {
 
         streamCollector.lastLen = 0;
         streamBuffer = "";
+        _insideThinkTag = false;
+        _tagBuffer = "";
         pendingStdinBody = result.body;
         chatFetcher.stdinEnabled = true; // Re-enable before each request
         chatFetcher.command = result.cmd;
@@ -350,6 +359,59 @@ Item {
 
     property string streamBuffer: ""
     property string pendingStdinBody: ""
+    property bool _insideThinkTag: false
+    property string _tagBuffer: ""
+
+    // Route content deltas through <think> tag detection (Ollama/Qwen3/DeepSeek)
+    function routeContentDelta(streamId, delta) {
+        var text = _tagBuffer + delta;
+        _tagBuffer = "";
+
+        while (text.length > 0) {
+            var tag = _insideThinkTag ? "</think>" : "<think>";
+            var idx = text.indexOf(tag);
+
+            if (idx >= 0) {
+                var before = text.substring(0, idx);
+                if (before.length > 0) {
+                    if (_insideThinkTag)
+                        updateStreamThinking(streamId, before);
+                    else
+                        updateStreamContent(streamId, before);
+                }
+                _insideThinkTag = !_insideThinkTag;
+                text = text.substring(idx + tag.length);
+                // Strip leading newline after tag
+                if (text.startsWith("\n")) text = text.substring(1);
+            } else {
+                // Check for partial tag at end of buffer
+                var partialLen = 0;
+                for (var len = Math.min(text.length, tag.length - 1); len > 0; len--) {
+                    if (text.substring(text.length - len) === tag.substring(0, len)) {
+                        partialLen = len;
+                        break;
+                    }
+                }
+
+                if (partialLen > 0) {
+                    _tagBuffer = text.substring(text.length - partialLen);
+                    var output = text.substring(0, text.length - partialLen);
+                    if (output.length > 0) {
+                        if (_insideThinkTag)
+                            updateStreamThinking(streamId, output);
+                        else
+                            updateStreamContent(streamId, output);
+                    }
+                } else {
+                    if (_insideThinkTag)
+                        updateStreamThinking(streamId, text);
+                    else
+                        updateStreamContent(streamId, text);
+                }
+                text = "";
+            }
+        }
+    }
 
     function handleStreamChunk(chunk) {
         var buffer = streamBuffer + chunk;
@@ -402,13 +464,13 @@ Item {
                 var choices = data.choices;
                 if (choices && choices[0] && choices[0].delta) {
                     var d = choices[0].delta;
-                    // Show reasoning/thinking tokens (e.g. Qwen3, DeepSeek) while they stream
+                    // Explicit reasoning field (DeepSeek via OpenAI-compat providers)
                     var reasoning = d.reasoning_content || d.reasoning || "";
                     var content = d.content || "";
                     if (reasoning)
-                        updateStreamContent(activeStreamId, reasoning);
+                        updateStreamThinking(activeStreamId, reasoning);
                     if (content)
-                        updateStreamContent(activeStreamId, content);
+                        routeContentDelta(activeStreamId, content);
                 }
                 if (choices && choices[0] && choices[0].finish_reason)
                     finalizeStream(activeStreamId);
@@ -522,6 +584,16 @@ Item {
         }
     }
 
+    function updateStreamThinking(streamId, deltaText) {
+        if (!deltaText) return;
+        var idx = findIndexById(streamId);
+        if (idx >= 0) {
+            var cur = messagesModel.get(idx).thinking || "";
+            messagesModel.setProperty(idx, "thinking", cur + deltaText);
+            messagesModel.setProperty(idx, "status", "streaming");
+        }
+    }
+
     function getMessageContentById(msgId) {
         var idx = findIndexById(msgId);
         if (idx >= 0) return messagesModel.get(idx).content || "";
@@ -535,6 +607,16 @@ Item {
     }
 
     function finalizeStream(streamId) {
+        // Flush any remaining tag buffer
+        if (_tagBuffer.length > 0) {
+            if (_insideThinkTag)
+                updateStreamThinking(streamId, _tagBuffer);
+            else
+                updateStreamContent(streamId, _tagBuffer);
+            _tagBuffer = "";
+        }
+        _insideThinkTag = false;
+
         var idx = findIndexById(streamId);
         if (idx >= 0)
             messagesModel.setProperty(idx, "status", "ok");
@@ -559,6 +641,7 @@ Item {
 
         stdout: StdioCollector {
             id: streamCollector
+            waitForEnd: false
             property int lastLen: 0
 
             onTextChanged: {
