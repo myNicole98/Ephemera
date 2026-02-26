@@ -455,12 +455,37 @@ Item {
                             } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_Return) {
                                 sendCurrentMessage();
                                 event.accepted = true;
+                            } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_L) {
+                                if (!aiService.isStreaming) aiService.clearChat();
+                                composer.forceActiveFocus();
+                                event.accepted = true;
+                            } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_N) {
+                                if (!aiService.isStreaming) {
+                                    aiService.clearChat();
+                                    composer.text = "";
+                                }
+                                composer.forceActiveFocus();
+                                event.accepted = true;
+                            } else if ((event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) === (Qt.ControlModifier | Qt.ShiftModifier) && event.key === Qt.Key_S) {
+                                if (showSettings) closeSettings();
+                                else showSettings = true;
+                                event.accepted = true;
+                            } else if (event.key === Qt.Key_Up && composer.text.length === 0 && aiService.lastUserText.length > 0) {
+                                composer.text = aiService.lastUserText;
+                                composer.cursorPosition = composer.text.length;
+                                event.accepted = true;
                             }
                         }
 
-                        // Prevent Enter from inserting newline when sending
+                        // Prevent default behavior for handled shortcuts
                         Keys.onPressed: event => {
                             if (event.key === Qt.Key_Return && !(event.modifiers & Qt.ShiftModifier)) {
+                                event.accepted = true;
+                            } else if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_L || event.key === Qt.Key_N)) {
+                                event.accepted = true;
+                            } else if ((event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) === (Qt.ControlModifier | Qt.ShiftModifier) && event.key === Qt.Key_S) {
+                                event.accepted = true;
+                            } else if (event.key === Qt.Key_Up && composer.text.length === 0 && aiService.lastUserText.length > 0) {
                                 event.accepted = true;
                             }
                         }

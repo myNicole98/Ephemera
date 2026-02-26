@@ -169,6 +169,10 @@ ollama serve &
 - Save Chat History toggle persists messages across sessions; clearing chat also clears persisted data
 - Close button handles Ollama shutdown (auto-stop if plugin started it, dialog if external)
 - Escape key triggers close flow (same as close button)
+- Ctrl+L clears chat (blocked during streaming)
+- Ctrl+N clears chat and composer (blocked during streaming)
+- Ctrl+Shift+S toggles settings overlay
+- Up arrow in empty composer recalls last sent message; with text in composer, moves cursor normally
 - Expand/collapse button works on the slideout
 - Custom base URLs are validated (http/https only, valid hostname, max 2048 chars); inline error shown on invalid input
 - HTTP errors show contextual hints (401 → check API key, 429 → rate limited, etc.)

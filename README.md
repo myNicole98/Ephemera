@@ -63,6 +63,19 @@ Settings are persisted via Quickshell's `PluginService`. API keys are never stor
 
 Open the slideout panel via your shell's configured keybind or action. Type a message and press **Enter** to send (Shift+Enter for newline). Press **Escape** to dismiss the panel.
 
+**Keyboard shortcuts:**
+
+| Shortcut | Action |
+|---|---|
+| Enter | Send message |
+| Shift+Enter | Insert newline |
+| Ctrl+Enter | Send message |
+| Escape | Close panel |
+| Ctrl+L | Clear chat |
+| Ctrl+N | New conversation (clear chat + composer) |
+| Ctrl+Shift+S | Toggle settings |
+| Up arrow | Recall last sent message (when composer is empty) |
+
 - **Copy** — hover over an assistant message to reveal the copy button (shows a checkmark on success)
 - **Regenerate** — hover over the last assistant message to reveal the regenerate button; after regenerating, use the `<` `>` arrows to navigate between response variants; each variant's model chip shows which model generated it
 - **Export** — click the copy icon in the header to copy the conversation as markdown, or the save icon to write it to `~/ephemera-chat-<timestamp>.md`
