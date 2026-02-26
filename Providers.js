@@ -113,6 +113,9 @@ function anthropicRequest(payload, apiKey) {
         "-H", "anthropic-version: 2023-06-01"
     ];
 
+    if (payload.thinkingEnabled)
+        headers.push("-H", "anthropic-beta: interleaved-thinking-2025-05-14");
+
     // Extract system prompt from messages if present
     var extracted = extractSystemPrompt(payload.messages);
     var filteredMessages = [];
@@ -124,13 +127,18 @@ function anthropicRequest(payload, apiKey) {
         });
     }
 
+    var maxTokens = payload.max_tokens || 4096;
     var body = {
         model: payload.model,
         messages: filteredMessages,
-        max_tokens: payload.max_tokens || 4096,
-        temperature: payload.temperature || 0.7,
+        max_tokens: maxTokens,
+        temperature: payload.thinkingEnabled ? 1 : (payload.temperature || 0.7),
         stream: true
     };
+
+    if (payload.thinkingEnabled)
+        body.thinking = { type: "enabled", budget_tokens: Math.max(1024, Math.floor(maxTokens * 0.8)) };
+
     if (extracted.systemText)
         body.system = extracted.systemText;
 

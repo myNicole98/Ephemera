@@ -12,7 +12,7 @@ Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plug
 - **Ollama auto-management** — automatically starts `ollama serve` if not running, discovers available models, and re-checks connectivity each time the panel opens
 - **Markdown rendering** — assistant responses rendered as rich text with code blocks, tables, lists, and blockquotes (deferred until streaming completes for performance)
 - **System prompt presets** — quick-select presets (Concise, Code Expert, Translator, Writing Editor) or write a custom system prompt
-- **Regenerate responses** — retry the last assistant response with a single click
+- **Regenerate with variant pagination** — retry the last assistant response with a single click; previous responses are preserved and navigable with `< 1/2 >` pagination arrows (ChatGPT-style), even mid-stream
 - **Export conversation** — copy the full conversation as markdown to clipboard
 - **Zero persistence** — messages are never written to disk; API keys are read from environment variables only
 - **Security-first** — request bodies sent via stdin (never in `/proc/cmdline`), API keys passed as headers (not URL params), link scheme restricted to http/https, custom URLs validated, stdout buffer capped
@@ -63,7 +63,7 @@ Settings are persisted via Quickshell's `PluginService`. API keys are never stor
 Open the slideout panel via your shell's configured keybind or action. Type a message and press **Enter** to send (Shift+Enter for newline). Press **Escape** to dismiss the panel.
 
 - **Copy** — hover over an assistant message to reveal the copy button (shows a checkmark on success)
-- **Regenerate** — hover over the last assistant message to reveal the regenerate button
+- **Regenerate** — hover over the last assistant message to reveal the regenerate button; after regenerating, use the `<` `>` arrows to navigate between response variants
 - **Export** — click the copy icon in the header toolbar to copy the full conversation as markdown
 - **Expand** — use the expand button to widen the panel; model chips in the header and message bubbles expand to show full model names
 

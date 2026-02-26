@@ -17,7 +17,10 @@ Item {
     property bool expanded: false
     property bool isLastAssistant: false
     property bool canRegenerate: false
+    property int variantIndex: 0
+    property int variantCount: 1
     signal regenerateRequested
+    signal variantChangeRequested(int newIndex)
 
     readonly property bool isUser: role === "user"
     readonly property real bubbleMaxWidth: isUser ? Math.max(240, Math.floor(width * 0.82)) : width
@@ -190,6 +193,46 @@ Item {
 
                 Item { Layout.fillWidth: !root.isUser }
 
+                Row {
+                    visible: !root.isUser && root.variantCount > 1
+                    opacity: hoverHandler.hovered ? 1.0 : 0.0
+                    spacing: 2
+                    Layout.alignment: Qt.AlignVCenter
+
+                    Behavior on opacity {
+                        NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
+                    }
+
+                    DankActionButton {
+                        iconName: "chevron_left"
+                        buttonSize: 24
+                        iconSize: 14
+                        backgroundColor: "transparent"
+                        iconColor: Theme.surfaceVariantText
+                        enabled: root.variantIndex > 0
+                        opacity: enabled ? 1.0 : 0.3
+                        onClicked: root.variantChangeRequested(root.variantIndex - 1)
+                    }
+
+                    StyledText {
+                        text: (root.variantIndex + 1) + "/" + root.variantCount
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceVariantText
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    DankActionButton {
+                        iconName: "chevron_right"
+                        buttonSize: 24
+                        iconSize: 14
+                        backgroundColor: "transparent"
+                        iconColor: Theme.surfaceVariantText
+                        enabled: root.variantIndex < root.variantCount - 1
+                        opacity: enabled ? 1.0 : 0.3
+                        onClicked: root.variantChangeRequested(root.variantIndex + 1)
+                    }
+                }
+
                 DankActionButton {
                     id: copyBtn
                     visible: !root.isUser && root.status === "ok"
@@ -338,6 +381,7 @@ Item {
             }
 
             TextArea {
+                id: contentArea
                 text: root.useMarkdownRendering ? root.renderedHtml : root.text
                 textFormat: root.useMarkdownRendering ? Text.RichText : Text.PlainText
                 wrapMode: Text.Wrap
@@ -361,6 +405,17 @@ Item {
                 }
 
                 hoverEnabled: true
+
+                // Qt breaks the text binding when textFormat switches between
+                // RichText and PlainText. Re-establish it after each switch.
+                Connections {
+                    target: root
+                    function onUseMarkdownRenderingChanged() {
+                        contentArea.text = Qt.binding(function() {
+                            return root.useMarkdownRendering ? root.renderedHtml : root.text;
+                        });
+                    }
+                }
             }
 
             // Pulsing streaming dots (clickable to toggle thinking)

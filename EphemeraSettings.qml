@@ -182,6 +182,63 @@ Item {
                                     }
                                 }
 
+                                // Extended thinking toggle — accordion (Anthropic only)
+                                Item {
+                                    width: parent.width
+                                    height: aiService.provider === "anthropic" ? thinkingCol.implicitHeight : 0
+                                    clip: true
+                                    Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+
+                                    Column {
+                                        id: thinkingCol
+                                        width: parent.width
+                                        spacing: Theme.spacingS
+
+                                        Row {
+                                            width: parent.width
+                                            spacing: Theme.spacingM
+
+                                            DankIcon {
+                                                name: "psychology"
+                                                size: Theme.iconSize
+                                                color: Theme.primary
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+
+                                            Column {
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                spacing: Theme.spacingXS
+                                                width: parent.width - parent.spacing * 2 - Theme.iconSize - thinkingToggle.width
+
+                                                StyledText {
+                                                    text: "Extended Thinking"
+                                                    font.pixelSize: Theme.fontSizeMedium
+                                                    font.weight: Font.Medium
+                                                    color: Theme.surfaceText
+                                                }
+
+                                                StyledText {
+                                                    text: "Forces temperature to 1. Supported on claude-3.7-sonnet and newer."
+                                                    font.pixelSize: Theme.fontSizeSmall
+                                                    color: Theme.surfaceVariantText
+                                                    wrapMode: Text.WordWrap
+                                                    width: parent.width
+                                                }
+                                            }
+
+                                            Switch {
+                                                id: thinkingToggle
+                                                checked: aiService.thinkingEnabled
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                onToggled: {
+                                                    aiService.thinkingEnabled = checked;
+                                                    aiService.saveSettingValue("thinkingEnabled", checked);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
                                 // Model selector
                                 StyledText {
                                     text: "Model"

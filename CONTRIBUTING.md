@@ -14,11 +14,11 @@ This guide covers everything you need to know to work on Ephemera — a Quickshe
 ephemera/
 ├── plugin.json              # Plugin manifest (id, type, capabilities, entry point)
 ├── EphemeraDaemon.qml       # Entry point — service init, per-screen slideouts, IPC handler
-├── EphemeraService.qml      # Core state machine — messages, streaming, Ollama lifecycle, curl
+├── EphemeraService.qml      # Core state machine — messages, streaming, variants, Ollama lifecycle, curl
 ├── EphemeraChat.qml         # Main UI — header, message area, composer, overlays
 ├── EphemeraSettings.qml     # Settings panel — provider, model, parameters, API key status
 ├── MessageList.qml          # ListView wrapper with auto-scroll and entry animations
-├── MessageBubble.qml        # Individual message rendering (markdown, copy, regenerate, streaming dots)
+├── MessageBubble.qml        # Individual message rendering (markdown, variant pagination, copy, regenerate, streaming dots)
 ├── Providers.js             # Pure functions — builds provider-specific curl commands (shared extractSystemPrompt helper)
 ├── Markdown.js              # Markdown-to-HTML converter with security hardening
 ├── CLAUDE.md                # AI assistant context file
@@ -33,6 +33,8 @@ EphemeraDaemon (entry point)
 ├─ EphemeraService (singleton)
 │  ├─ Message ListModel (in-memory, never persisted)
 │  ├─ messageIndexMap (O(1) message lookups by ID)
+│  ├─ variantStore (side-channel JS map: msgId → [{content, thinking}])
+│  ├─ Stream buffers (_streamContent, _streamThinking, _streamVariantIndex)
 │  ├─ Provider settings (persisted via PluginService)
 │  ├─ Ollama lifecycle (ping → auto-start → discover models)
 │  ├─ Curl process (stdin body, SSE streaming, 10MB buffer cap)
@@ -46,7 +48,9 @@ EphemeraDaemon (entry point)
          └─ EphemeraSettings (overlay)
 ```
 
-**Data flow:** User types → `EphemeraChat.sendCurrentMessage()` → `EphemeraService.sendMessage()` → builds payload with sliding context window → `Providers.buildCurlCommand()` → spawns curl via `Process` with body on stdin → `StdioCollector` captures SSE chunks → `handleStreamChunk()` parses `data:` lines → `parseProviderDelta()` extracts text per provider → `updateStreamContent()` appends to ListModel → UI updates live.
+**Data flow:** User types → `EphemeraChat.sendCurrentMessage()` → `EphemeraService.sendMessage()` → builds payload with sliding context window → `Providers.buildCurlCommand()` → spawns curl via `Process` with body on stdin → `StdioCollector` captures SSE chunks → `handleStreamChunk()` parses `data:` lines → `parseProviderDelta()` extracts text per provider → `updateStreamContent()` appends to `_streamContent` buffer and conditionally updates ListModel (only if the user is viewing the streaming variant) → UI updates live.
+
+**Regeneration flow:** User clicks Regenerate → `regenerate()` saves current `{content, thinking}` into `variantStore[msgId]` → increments `variantCount`, resets message for streaming → `_launchCurl()` starts new request (no new messages appended) → stream writes to `_streamContent`/`_streamThinking` buffers → on finalize, saved to `variantStore` at `_streamVariantIndex` → user navigates variants via `switchVariant()` which loads from `variantStore`.
 
 ## Setup for development
 
@@ -142,6 +146,9 @@ ollama serve &
 - Streaming shows pulsing dots (tertiary color during thinking, primary during generating), then renders markdown when done
 - Copy button appears on hover over assistant messages; shows checkmark feedback for 1.5s
 - Regenerate button appears on hover over the last assistant message
+- After regenerating, pagination arrows (`< 1/2 >`) appear on hover; navigating between variants shows correct content and thinking
+- Navigating to a previous variant mid-stream shows completed content (not streaming artifacts); navigating back to the streaming variant resumes live display
+- Cancelling during regeneration preserves partial content as a navigable variant
 - Error messages trigger a shake animation
 - Composer grows/shrinks as text is typed (44–160px)
 - Send button disabled and placeholder turns red when API key is missing
@@ -237,6 +244,29 @@ Use only properties that exist on `Theme`. Some that **do** exist:
 - `Theme.withAlpha(color, alpha)`, `Theme.cornerRadius`, `Theme.spacingS/M/L/XS`
 
 Some that **do not** exist: `Theme.scrim`, `Theme.errorText`.
+
+### TextArea textFormat binding breakage
+
+Dynamically switching `textFormat` between `Text.RichText` and `Text.PlainText` on the same `TextArea` **breaks the `text` binding**. When Qt re-interprets the content during the format switch, it overwrites the `text` property with its internal representation (e.g., Qt HTML), severing the declarative binding.
+
+**Workaround:** Re-establish the binding after each switch:
+
+```qml
+TextArea {
+    id: contentArea
+    text: useRichText ? renderedHtml : plainText
+    textFormat: useRichText ? Text.RichText : Text.PlainText
+
+    Connections {
+        target: root
+        function onUseRichTextChanged() {
+            contentArea.text = Qt.binding(function() {
+                return root.useRichText ? root.renderedHtml : root.plainText;
+            });
+        }
+    }
+}
+```
 
 ### StyledText defaults
 

@@ -11,6 +11,7 @@ Item {
     property bool expanded: false
     property bool canRegenerate: false
     signal regenerateRequested
+    signal variantChangeRequested(string msgId, int newIndex)
 
     function scrollToBottom() {
         stickToBottom = true;
@@ -87,7 +88,10 @@ Item {
                 expanded: root.expanded
                 isLastAssistant: model.role === "assistant" && index === listView.count - 1
                 canRegenerate: root.canRegenerate
+                variantIndex: model.variantIndex || 0
+                variantCount: model.variantCount || 1
                 onRegenerateRequested: root.regenerateRequested()
+                onVariantChangeRequested: newIndex => root.variantChangeRequested(model.id, newIndex)
             }
         }
     }

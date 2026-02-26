@@ -14,6 +14,7 @@ Item {
     property ListModel messagesModel: ListModel {}
     property int messageCount: messagesModel.count
     property var messageIndexMap: ({})
+    property var variantStore: ({})
     property bool isStreaming: false
     property bool lastRequestFailed: false
     property string discoveryError: ""
@@ -31,6 +32,7 @@ Item {
     property int maxTurns: 10
     property int timeout: 300
     property string systemPrompt: ""
+    property bool thinkingEnabled: false
 
     // --- Ollama state ---
     property ListModel availableModels: ListModel {}
@@ -205,6 +207,7 @@ Item {
         maxTurns = PluginService.loadPluginData(pluginId, "maxTurns", 10);
         timeout = PluginService.loadPluginData(pluginId, "timeout", 300);
         systemPrompt = String(PluginService.loadPluginData(pluginId, "systemPrompt", "")).trim();
+        thinkingEnabled = PluginService.loadPluginData(pluginId, "thinkingEnabled", false) === true;
 
         // Set baseUrl based on provider
         updateBaseUrl();
@@ -264,6 +267,7 @@ Item {
     function clearChat() {
         messagesModel.clear();
         messageIndexMap = ({});
+        variantStore = ({});
         isStreaming = false;
         activeStreamId = "";
         lastUserText = "";
@@ -281,16 +285,74 @@ Item {
 
     function regenerate() {
         if (isStreaming || !lastUserText) return;
-        // Remove last assistant message
-        if (messagesModel.count > 0) {
-            var last = messagesModel.get(messagesModel.count - 1);
-            if (last.role === "assistant") {
-                delete messageIndexMap[last.id];
-                messagesModel.remove(messagesModel.count - 1);
-            }
-        }
+        if (messagesModel.count === 0) return;
+
+        // Find the last assistant message
+        var lastIdx = messagesModel.count - 1;
+        var last = messagesModel.get(lastIdx);
+        if (last.role !== "assistant") return;
+
+        var msgId = last.id;
+
+        // Save current content as a variant
+        _saveVariant(msgId, last.variantIndex, last.content, last.thinking);
+
+        // Increment variant count and set index to new slot
+        var newCount = last.variantCount + 1;
+        var newIndex = newCount - 1;
+        messagesModel.setProperty(lastIdx, "variantCount", newCount);
+        messagesModel.setProperty(lastIdx, "variantIndex", newIndex);
+
+        // Reset message for new streaming
+        messagesModel.setProperty(lastIdx, "content", "");
+        messagesModel.setProperty(lastIdx, "thinking", "");
+        messagesModel.setProperty(lastIdx, "status", "streaming");
+
+        activeStreamId = msgId;
+        isStreaming = true;
+        lastHttpStatus = 0;
         lastRequestFailed = false;
-        startStreaming(lastUserText);
+        _streamContent = "";
+        _streamThinking = "";
+        _streamVariantIndex = newIndex;
+
+        _launchCurl();
+    }
+
+    function _saveVariant(msgId, index, content, thinking) {
+        var store = variantStore;
+        if (!store[msgId]) store[msgId] = [];
+        store[msgId][index] = { content: content || "", thinking: thinking || "" };
+        variantStore = store;
+    }
+
+    function switchVariant(msgId, newIndex) {
+        var idx = findIndexById(msgId);
+        if (idx < 0) return;
+        var msg = messagesModel.get(idx);
+        if (newIndex < 0 || newIndex >= msg.variantCount) return;
+
+        // Switching to the currently-streaming variant: show live buffers
+        if (isStreaming && activeStreamId === msgId && newIndex === _streamVariantIndex) {
+            messagesModel.setProperty(idx, "content", _streamContent);
+            messagesModel.setProperty(idx, "thinking", _streamThinking);
+            messagesModel.setProperty(idx, "variantIndex", newIndex);
+            messagesModel.setProperty(idx, "status", "streaming");
+            return;
+        }
+
+        // Switching away from streaming variant or between completed variants
+        var store = variantStore;
+        if (!store[msgId] || !store[msgId][newIndex]) return;
+
+        var variant = store[msgId][newIndex];
+        messagesModel.setProperty(idx, "content", variant.content);
+        messagesModel.setProperty(idx, "thinking", variant.thinking);
+        messagesModel.setProperty(idx, "variantIndex", newIndex);
+        // Show as "ok" when viewing a completed variant (even if another is streaming)
+        if (isStreaming && activeStreamId === msgId) {
+            messagesModel.setProperty(idx, "status", "ok");
+        }
     }
 
     function exportConversation() {
@@ -306,8 +368,10 @@ Item {
 
     function cancel() {
         if (!isStreaming) return;
+        var streamId = activeStreamId;
+        isStreaming = false; // Prevent onExited race
+        markCancelled(streamId);
         chatFetcher.running = false;
-        markError(activeStreamId, "Cancelled");
     }
 
     function startStreaming(text) {
@@ -315,23 +379,30 @@ Item {
         var streamId = "assistant-" + now;
 
         var userId = "user-" + now;
-        messagesModel.append({ role: "user", content: text, thinking: "", timestamp: now, id: userId, status: "ok" });
+        messagesModel.append({ role: "user", content: text, thinking: "", timestamp: now, id: userId, status: "ok", variantIndex: 0, variantCount: 1 });
         messageIndexMap[userId] = messagesModel.count - 1;
         lastUserText = text;
 
-        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now + 1, id: streamId, status: "streaming" });
+        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now + 1, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1 });
         messageIndexMap[streamId] = messagesModel.count - 1;
         activeStreamId = streamId;
         isStreaming = true;
         lastHttpStatus = 0;
+        _streamContent = "";
+        _streamThinking = "";
+        _streamVariantIndex = 0;
 
-        var payload = buildPayload(text);
+        _launchCurl();
+    }
+
+    function _launchCurl() {
+        var payload = buildPayload(lastUserText);
         var result = buildCurlCommand(payload);
         if (!result) {
             if (provider === "ollama") {
-                markError(streamId, ollamaReady ? "No Ollama model selected." : "Ollama is not running. Check that ollama is installed.");
+                markError(activeStreamId, ollamaReady ? "No Ollama model selected." : "Ollama is not running. Check that ollama is installed.");
             } else {
-                markError(streamId, "No API key found. Set the appropriate environment variable.");
+                markError(activeStreamId, "No API key found. Set the appropriate environment variable.");
             }
             return;
         }
@@ -341,7 +412,7 @@ Item {
         _insideThinkTag = false;
         _tagBuffer = "";
         pendingStdinBody = result.body;
-        chatFetcher.stdinEnabled = true; // Re-enable before each request
+        chatFetcher.stdinEnabled = true;
         chatFetcher.command = result.cmd;
         chatFetcher.running = true;
     }
@@ -372,8 +443,6 @@ Item {
             msgs.push(collected[j]);
         }
 
-        msgs.push({ role: "user", content: latestText });
-
         return {
             provider: provider,
             baseUrl: baseUrl,
@@ -382,7 +451,8 @@ Item {
             max_tokens: maxTokens,
             messages: msgs,
             stream: true,
-            timeout: timeout
+            timeout: timeout,
+            thinkingEnabled: thinkingEnabled
         };
     }
 
@@ -404,6 +474,9 @@ Item {
     property string pendingStdinBody: ""
     property bool _insideThinkTag: false
     property string _tagBuffer: ""
+    property string _streamContent: ""
+    property string _streamThinking: ""
+    property int _streamVariantIndex: 0
 
     // Route content deltas through <think> tag detection (Ollama/Qwen3/DeepSeek)
     function routeContentDelta(streamId, delta) {
@@ -486,10 +559,13 @@ Item {
         try {
             var data = JSON.parse(jsonText);
             if (provider === "anthropic") {
-                var delta = (data.delta && data.delta.text) ? data.delta.text : "";
-                if (delta)
-                    updateStreamContent(activeStreamId, delta);
-                if (data.stop_reason)
+                if (data.type === "content_block_delta" && data.delta) {
+                    if (data.delta.type === "thinking_delta" && data.delta.thinking)
+                        updateStreamThinking(activeStreamId, data.delta.thinking);
+                    else if (data.delta.type === "text_delta" && data.delta.text)
+                        updateStreamContent(activeStreamId, data.delta.text);
+                }
+                if (data.type === "message_delta" && data.delta && data.delta.stop_reason)
                     finalizeStream(activeStreamId);
             } else if (provider === "gemini") {
                 var chunks = Array.isArray(data) ? data : [data];
@@ -537,11 +613,17 @@ Item {
 
         // Try non-streaming fallback if no content was streamed
         if (isStreaming) {
-            var existing = getMessageContentById(activeStreamId);
-            if ((!existing || existing.length === 0) && bodyText && lastHttpStatus > 0 && lastHttpStatus < 400) {
+            if (_streamContent.length === 0 && bodyText && lastHttpStatus > 0 && lastHttpStatus < 400) {
                 var parsed = extractNonStreamingAssistantText(bodyText);
-                if (parsed && parsed.length > 0)
-                    setMessageContentById(activeStreamId, parsed);
+                if (parsed && parsed.length > 0) {
+                    _streamContent = parsed;
+                    var fbIdx = findIndexById(activeStreamId);
+                    if (fbIdx >= 0) {
+                        var fbMsg = messagesModel.get(fbIdx);
+                        if (fbMsg.variantIndex === _streamVariantIndex)
+                            messagesModel.setProperty(fbIdx, "content", parsed);
+                    }
+                }
             }
         }
 
@@ -609,7 +691,12 @@ Item {
     function markError(streamId, message) {
         var idx = findIndexById(streamId);
         if (idx >= 0) {
-            messagesModel.setProperty(idx, "content", message);
+            _streamContent = message;
+            _saveVariant(streamId, _streamVariantIndex, _streamContent, _streamThinking);
+            var msg = messagesModel.get(idx);
+            if (msg.variantIndex === _streamVariantIndex) {
+                messagesModel.setProperty(idx, "content", message);
+            }
             messagesModel.setProperty(idx, "status", "error");
         }
         isStreaming = false;
@@ -617,22 +704,53 @@ Item {
         lastRequestFailed = true;
     }
 
-    function updateStreamContent(streamId, deltaText) {
-        if (!deltaText) return;
+    function markCancelled(streamId) {
+        // Flush any remaining tag buffer as content
+        if (_tagBuffer.length > 0) {
+            if (_insideThinkTag)
+                updateStreamThinking(streamId, _tagBuffer);
+            else
+                updateStreamContent(streamId, _tagBuffer);
+            _tagBuffer = "";
+        }
+        _insideThinkTag = false;
+
         var idx = findIndexById(streamId);
         if (idx >= 0) {
-            var cur = messagesModel.get(idx).content || "";
-            messagesModel.setProperty(idx, "content", cur + deltaText);
+            _saveVariant(streamId, _streamVariantIndex, _streamContent, _streamThinking);
+            var msg = messagesModel.get(idx);
+            if (msg.variantIndex === _streamVariantIndex) {
+                messagesModel.setProperty(idx, "content", _streamContent);
+                messagesModel.setProperty(idx, "thinking", _streamThinking);
+            }
+            messagesModel.setProperty(idx, "status", "ok");
+        }
+        isStreaming = false;
+        activeStreamId = "";
+    }
+
+    function updateStreamContent(streamId, deltaText) {
+        if (!deltaText) return;
+        _streamContent += deltaText;
+        var idx = findIndexById(streamId);
+        if (idx >= 0) {
+            var msg = messagesModel.get(idx);
+            if (msg.variantIndex === _streamVariantIndex) {
+                messagesModel.setProperty(idx, "content", _streamContent);
+            }
             messagesModel.setProperty(idx, "status", "streaming");
         }
     }
 
     function updateStreamThinking(streamId, deltaText) {
         if (!deltaText) return;
+        _streamThinking += deltaText;
         var idx = findIndexById(streamId);
         if (idx >= 0) {
-            var cur = messagesModel.get(idx).thinking || "";
-            messagesModel.setProperty(idx, "thinking", cur + deltaText);
+            var msg = messagesModel.get(idx);
+            if (msg.variantIndex === _streamVariantIndex) {
+                messagesModel.setProperty(idx, "thinking", _streamThinking);
+            }
             messagesModel.setProperty(idx, "status", "streaming");
         }
     }
@@ -661,8 +779,16 @@ Item {
         _insideThinkTag = false;
 
         var idx = findIndexById(streamId);
-        if (idx >= 0)
+        if (idx >= 0) {
+            _saveVariant(streamId, _streamVariantIndex, _streamContent, _streamThinking);
+            var msg = messagesModel.get(idx);
+            // If still viewing the streaming variant, update content from buffers
+            if (msg.variantIndex === _streamVariantIndex) {
+                messagesModel.setProperty(idx, "content", _streamContent);
+                messagesModel.setProperty(idx, "thinking", _streamThinking);
+            }
             messagesModel.setProperty(idx, "status", "ok");
+        }
         isStreaming = false;
         activeStreamId = "";
     }

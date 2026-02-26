@@ -207,6 +207,7 @@ Item {
                 expanded: root.slideoutExpanded
                 canRegenerate: !aiService.isStreaming && aiService.lastUserText.length > 0
                 onRegenerateRequested: aiService.regenerate()
+                onVariantChangeRequested: (msgId, newIndex) => aiService.switchVariant(msgId, newIndex)
             }
 
             // Breathing empty state
