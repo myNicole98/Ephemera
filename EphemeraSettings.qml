@@ -174,10 +174,36 @@ Item {
                                             placeholderText: "https://api.openai.com"
                                             onEditingFinished: {
                                                 var url = text.trim();
-                                                if (url && !/^https?:\/\//i.test(url)) return;
+                                                if (!url) {
+                                                    customUrlError.text = "";
+                                                    return;
+                                                }
+                                                if (url.length > 2048) {
+                                                    customUrlError.text = "URL is too long (max 2048 characters).";
+                                                    return;
+                                                }
+                                                if (!/^https?:\/\//i.test(url)) {
+                                                    customUrlError.text = "Must start with http:// or https://";
+                                                    return;
+                                                }
+                                                if (!/^https?:\/\/[a-zA-Z0-9\-_.:]/.test(url)) {
+                                                    customUrlError.text = "Invalid hostname in URL.";
+                                                    return;
+                                                }
+                                                customUrlError.text = "";
                                                 aiService.baseUrl = url;
                                                 aiService.saveSettingValue("customBaseUrl", url);
                                             }
+                                        }
+
+                                        StyledText {
+                                            id: customUrlError
+                                            width: parent.width
+                                            text: ""
+                                            visible: text.length > 0
+                                            font.pixelSize: Theme.fontSizeSmall
+                                            color: Theme.error
+                                            wrapMode: Text.Wrap
                                         }
                                     }
                                 }
@@ -297,20 +323,33 @@ Item {
                                     }
                                 }
 
-                                // Refresh models button — accordion (Ollama only)
+                                // Ollama action buttons — accordion (Ollama only)
                                 Item {
                                     width: parent.width
-                                    height: aiService.provider === "ollama" ? refreshBtn.implicitHeight : 0
+                                    height: aiService.provider === "ollama" ? ollamaActionsCol.implicitHeight : 0
                                     clip: true
                                     Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
 
-                                    DankButton {
-                                        id: refreshBtn
-                                        text: "Refresh Models"
-                                        iconName: "refresh"
+                                    Column {
+                                        id: ollamaActionsCol
                                         width: parent.width
-                                        enabled: aiService.ollamaReady
-                                        onClicked: aiService.discoverModels()
+                                        spacing: Theme.spacingS
+
+                                        DankButton {
+                                            id: refreshBtn
+                                            text: "Refresh Models"
+                                            iconName: "refresh"
+                                            width: parent.width
+                                            enabled: aiService.ollamaReady
+                                            onClicked: aiService.discoverModels()
+                                        }
+
+                                        DankButton {
+                                            text: aiService.ollamaReady ? "Reconnect Ollama" : "Connect to Ollama"
+                                            iconName: "power"
+                                            width: parent.width
+                                            onClicked: aiService.ensureOllamaReady()
+                                        }
                                     }
                                 }
                             }
@@ -687,6 +726,67 @@ Item {
                                         font.family: Theme.monoFontFamily
                                         color: Theme.surfaceText
                                         anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // -- Card 4: Chat History --
+                    Rectangle {
+                        width: parent.width
+                        height: persistContent.height + Theme.spacingL * 2
+                        radius: Theme.cornerRadius
+                        color: Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
+                        border.color: Qt.rgba(Theme.outline.r, Theme.outline.g, Theme.outline.b, 0.08)
+                        border.width: 1
+
+                        Column {
+                            id: persistContent
+                            width: parent.width - Theme.spacingL * 2
+                            anchors.centerIn: parent
+                            spacing: Theme.spacingM
+
+                            Row {
+                                width: parent.width
+                                spacing: Theme.spacingM
+
+                                DankIcon {
+                                    name: "save"
+                                    size: Theme.iconSize
+                                    color: Theme.primary
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                Column {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    spacing: Theme.spacingXS
+                                    width: parent.width - parent.spacing * 2 - Theme.iconSize - persistToggle.width
+
+                                    StyledText {
+                                        text: "Save Chat History"
+                                        font.pixelSize: Theme.fontSizeMedium
+                                        font.weight: Font.Medium
+                                        color: Theme.surfaceText
+                                    }
+
+                                    StyledText {
+                                        text: "Persist conversations across sessions. API keys are never stored."
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        color: Theme.surfaceVariantText
+                                        wrapMode: Text.WordWrap
+                                        width: parent.width
+                                    }
+                                }
+
+                                Switch {
+                                    id: persistToggle
+                                    checked: aiService.persistChat
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    onToggled: {
+                                        aiService.persistChat = checked;
+                                        aiService.saveSettingValue("persistChat", checked);
+                                        if (checked) aiService.saveChatHistory();
                                     }
                                 }
                             }

@@ -84,7 +84,7 @@ Item {
                 text: model.content
                 thinking: model.thinking || ""
                 status: model.status
-                modelName: root.modelName
+                modelName: (model.modelName || "").length > 0 ? model.modelName : root.modelName
                 expanded: root.expanded
                 isLastAssistant: model.role === "assistant" && index === listView.count - 1
                 canRegenerate: root.canRegenerate

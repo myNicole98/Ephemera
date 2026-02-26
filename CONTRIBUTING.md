@@ -31,13 +31,14 @@ ephemera/
 EphemeraDaemon (entry point)
 │
 ├─ EphemeraService (singleton)
-│  ├─ Message ListModel (in-memory, never persisted)
+│  ├─ Message ListModel (in-memory by default, optionally persisted)
 │  ├─ messageIndexMap (O(1) message lookups by ID)
-│  ├─ variantStore (side-channel JS map: msgId → [{content, thinking}])
+│  ├─ variantStore (side-channel JS map: msgId → [{content, thinking, modelName}])
 │  ├─ Stream buffers (_streamContent, _streamThinking, _streamVariantIndex)
 │  ├─ Provider settings (persisted via PluginService)
-│  ├─ Ollama lifecycle (ping → auto-start → discover models)
-│  ├─ Curl process (stdin body, SSE streaming, 10MB buffer cap)
+│  ├─ Chat persistence (opt-in via persistChat toggle)
+│  ├─ Ollama lifecycle (ping → auto-start → discover models, 15 retries)
+│  ├─ Curl process (stdin body, SSE streaming, 5MB buffer cap)
 │  └─ Providers.js (curl command builders per provider, shared extractSystemPrompt)
 │
 └─ Variants (one per screen)
@@ -50,7 +51,7 @@ EphemeraDaemon (entry point)
 
 **Data flow:** User types → `EphemeraChat.sendCurrentMessage()` → `EphemeraService.sendMessage()` → builds payload with sliding context window → `Providers.buildCurlCommand()` → spawns curl via `Process` with body on stdin → `StdioCollector` captures SSE chunks → `handleStreamChunk()` parses `data:` lines → `parseProviderDelta()` extracts text per provider → `updateStreamContent()` appends to `_streamContent` buffer and conditionally updates ListModel (only if the user is viewing the streaming variant) → UI updates live.
 
-**Regeneration flow:** User clicks Regenerate → `regenerate()` saves current `{content, thinking}` into `variantStore[msgId]` → increments `variantCount`, resets message for streaming → `_launchCurl()` starts new request (no new messages appended) → stream writes to `_streamContent`/`_streamThinking` buffers → on finalize, saved to `variantStore` at `_streamVariantIndex` → user navigates variants via `switchVariant()` which loads from `variantStore`.
+**Regeneration flow:** User clicks Regenerate → `regenerate()` saves current `{content, thinking, modelName}` into `variantStore[msgId]` → increments `variantCount`, sets new variant's `modelName` to the current model, resets message for streaming → `_launchCurl()` starts new request (no new messages appended) → stream writes to `_streamContent`/`_streamThinking` buffers → on finalize, saved to `variantStore` at `_streamVariantIndex` → user navigates variants via `switchVariant()` which loads content and `modelName` from `variantStore`, so each variant's bubble chip shows the model that generated it.
 
 ## Setup for development
 
@@ -146,7 +147,8 @@ ollama serve &
 - Streaming shows pulsing dots (tertiary color during thinking, primary during generating), then renders markdown when done
 - Copy button appears on hover over assistant messages; shows checkmark feedback for 1.5s
 - Regenerate button appears on hover over the last assistant message
-- After regenerating, pagination arrows (`< 1/2 >`) appear on hover; navigating between variants shows correct content and thinking
+- After regenerating, pagination arrows (`< 1/2 >`) appear on hover; navigating between variants shows correct content, thinking, and model name
+- Switching models between regenerations: each variant's chip shows the model that generated it (not the current global model)
 - Navigating to a previous variant mid-stream shows completed content (not streaming artifacts); navigating back to the streaming variant resumes live display
 - Cancelling during regeneration preserves partial content as a navigable variant
 - Error messages trigger a shake animation
@@ -161,11 +163,15 @@ ollama serve &
 - Provider pill in header truncates long names with ellipsis; turns red when API key missing or last request failed
 - Provider pill and model chips in message bubbles expand when slideout is expanded
 - Thinking section has clear visual separation from content (spacing + divider)
-- Export button in header copies full conversation as markdown
+- Export button in header copies full conversation as markdown; save button writes to `~/ephemera-chat-<timestamp>.md`
+- Missing API key banner shows which env var to set (visible in chat area, not just header pill)
+- "Connect to Ollama" button in settings triggers reconnect
+- Save Chat History toggle persists messages across sessions; clearing chat also clears persisted data
 - Close button handles Ollama shutdown (auto-stop if plugin started it, dialog if external)
 - Escape key triggers close flow (same as close button)
 - Expand/collapse button works on the slideout
-- Custom base URLs are validated (http/https only)
+- Custom base URLs are validated (http/https only, valid hostname, max 2048 chars); inline error shown on invalid input
+- HTTP errors show contextual hints (401 → check API key, 429 → rate limited, etc.)
 
 ## Quickshell QML constraints
 
@@ -290,10 +296,10 @@ These are non-negotiable design decisions:
 - **API keys from environment variables only.** Never add input fields for API keys. Never store them to disk.
 - **Curl body via stdin** (`-d @-`). Never pass the request body as a command-line argument — it would be visible in `/proc/cmdline`.
 - **Link scheme whitelist.** Only `http://` and `https://` links are opened. No `file://`, `javascript:`, or other schemes.
-- **HTML escaping in Markdown.js.** All user content is escaped before rendering as rich text. Code blocks, table cells, and language labels are all escaped independently.
+- **HTML escaping in Markdown.js.** All user content is escaped before rendering as rich text. Code blocks, table cells, language labels, link text, and link URLs are all escaped independently.
 - **Gemini API key as header** (`x-goog-api-key`), not as a URL query parameter.
-- **Custom URL validation.** Custom base URLs must start with `http://` or `https://`. Reject anything else.
-- **Stdout buffer cap.** The `StdioCollector` is capped at 10MB. A rogue endpoint cannot exhaust memory.
+- **Custom URL validation.** Custom base URLs must start with `http://` or `https://`, have a valid hostname, and be under 2048 characters. Validation errors shown inline.
+- **Stdout buffer cap.** The `StdioCollector` is capped at 5MB (checked before processing the new chunk). A rogue endpoint cannot exhaust memory.
 
 ## Adding a new provider
 

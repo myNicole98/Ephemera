@@ -158,6 +158,13 @@ Item {
             }
 
             DankActionButton {
+                iconName: "save_as"
+                tooltipText: "Save conversation as .md"
+                enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
+                onClicked: aiService.exportConversationToFile()
+            }
+
+            DankActionButton {
                 iconName: "delete_sweep"
                 tooltipText: "Clear chat"
                 enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
@@ -208,6 +215,65 @@ Item {
                 canRegenerate: !aiService.isStreaming && aiService.lastUserText.length > 0
                 onRegenerateRequested: aiService.regenerate()
                 onVariantChangeRequested: (msgId, newIndex) => aiService.switchVariant(msgId, newIndex)
+            }
+
+            // Missing API key banner
+            Rectangle {
+                anchors.top: parent.top
+                anchors.topMargin: Theme.spacingM
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width - Theme.spacingL * 2
+                height: apiKeyBannerCol.implicitHeight + Theme.spacingM * 2
+                radius: Theme.cornerRadius
+                color: Theme.withAlpha(Theme.error, 0.08)
+                border.color: Theme.withAlpha(Theme.error, 0.3)
+                border.width: 1
+                visible: aiService.missingApiKey
+                z: 10
+
+                Column {
+                    id: apiKeyBannerCol
+                    anchors.centerIn: parent
+                    width: parent.width - Theme.spacingM * 2
+                    spacing: Theme.spacingXS
+
+                    Row {
+                        spacing: Theme.spacingS
+
+                        DankIcon {
+                            name: "vpn_key_off"
+                            size: 18
+                            color: Theme.error
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        StyledText {
+                            text: "API key not found"
+                            font.pixelSize: Theme.fontSizeMedium
+                            font.weight: Font.Medium
+                            color: Theme.error
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+
+                    StyledText {
+                        width: parent.width
+                        text: {
+                            var envVar = "";
+                            switch (aiService.provider) {
+                            case "openai": envVar = "OPENAI_API_KEY"; break;
+                            case "anthropic": envVar = "ANTHROPIC_API_KEY"; break;
+                            case "gemini": envVar = "GEMINI_API_KEY"; break;
+                            default: envVar = "EPHEMERA_API_KEY"; break;
+                            }
+                            return "Set the " + envVar + " environment variable before starting Quickshell.";
+                        }
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.family: Theme.fontFamily
+                        color: Theme.surfaceTextMedium
+                        wrapMode: Text.Wrap
+                    }
+                }
             }
 
             // Breathing empty state

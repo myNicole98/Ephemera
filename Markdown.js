@@ -109,13 +109,13 @@ function markdownToHtml(text, colors) {
     // Strikethrough
     html = html.replace(/~~(.*?)~~/g, '<s>$1</s>');
 
-    // Links — with scheme whitelist
+    // Links — with scheme whitelist; text and URL are escaped for safety
     html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(match, text, url) {
         if (/^https?:\/\//i.test(url)) {
-            return '<a href="' + url + '">' + text + '</a>';
+            return '<a href="' + escapeHtml(url) + '">' + escapeHtml(text) + '</a>';
         }
         // Non-http(s) schemes: render as plain text
-        return text + ' (' + url + ')';
+        return escapeHtml(text) + ' (' + escapeHtml(url) + ')';
     });
 
     // Task Lists

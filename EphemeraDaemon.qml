@@ -26,6 +26,8 @@ Item {
         }
     }
 
+    // Single shared service — conversation state is shared across all screens.
+    // Opening the panel on multiple screens simultaneously shows the same chat.
     EphemeraService {
         id: ephemeraService
         pluginId: root.pluginId

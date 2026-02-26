@@ -22,6 +22,9 @@ Item {
     property string lastUserText: ""
     property int lastHttpStatus: 0
 
+    // --- Persistence (opt-in) ---
+    property bool persistChat: false
+
     // --- Provider settings ---
     property string provider: "ollama"
     property string ollamaUrl: "http://localhost:11434"
@@ -37,10 +40,11 @@ Item {
     // --- Ollama state ---
     property ListModel availableModels: ListModel {}
     property bool ollamaWeStarted: false
+    property bool ollamaStartPending: false
     property bool ollamaExternallyManaged: false
     property bool ollamaReady: false
     property int ollamaRetries: 0
-    readonly property int ollamaMaxRetries: 5
+    readonly property int ollamaMaxRetries: 15
 
     readonly property bool isOllama: provider === "ollama"
     readonly property bool needsApiKey: provider !== "ollama"
@@ -49,10 +53,12 @@ Item {
 
     Component.onCompleted: {
         loadSettings();
+        loadChatHistory();
         pingOllama();
     }
 
     Component.onDestruction: {
+        saveChatHistory();
         // Only stop Ollama if we started it
         if (ollamaWeStarted && ollamaProcess.running) {
             ollamaProcess.running = false;
@@ -86,11 +92,17 @@ Item {
         id: ollamaProcess
         command: ["ollama", "serve"]
         running: false
+        onRunningChanged: {
+            if (running && root.ollamaStartPending) {
+                root.ollamaWeStarted = true;
+                root.ollamaStartPending = false;
+            }
+        }
     }
 
     Process {
         id: ollamaKiller
-        command: ["pkill", "ollama"]
+        command: ["pkill", "-f", "ollama serve"]
         running: false
     }
 
@@ -105,7 +117,7 @@ Item {
                     var data = JSON.parse(text);
                     if (data && data.models !== undefined) {
                         root.ollamaReady = true;
-                        if (!root.ollamaWeStarted)
+                        if (!root.ollamaWeStarted && !root.ollamaStartPending)
                             root.ollamaExternallyManaged = true;
                         discoverModels();
                         return;
@@ -130,9 +142,9 @@ Item {
     function handlePingFailed() {
         if (ollamaReady) return; // Already connected
 
-        if (!ollamaWeStarted && ollamaRetries === 0) {
+        if (!ollamaWeStarted && !ollamaStartPending && ollamaRetries === 0) {
             // First failure — try starting Ollama
-            ollamaWeStarted = true;
+            ollamaStartPending = true;
             ollamaProcess.running = true;
         }
 
@@ -199,6 +211,8 @@ Item {
     // ─── Settings persistence (non-secret only) ────────────────────
 
     function loadSettings() {
+        var oldProvider = provider;
+
         provider = String(PluginService.loadPluginData(pluginId, "provider", "ollama")).trim() || "ollama";
         ollamaUrl = String(PluginService.loadPluginData(pluginId, "ollamaUrl", "http://localhost:11434")).trim();
         model = String(PluginService.loadPluginData(pluginId, "model", "")).trim();
@@ -208,6 +222,11 @@ Item {
         timeout = PluginService.loadPluginData(pluginId, "timeout", 300);
         systemPrompt = String(PluginService.loadPluginData(pluginId, "systemPrompt", "")).trim();
         thinkingEnabled = PluginService.loadPluginData(pluginId, "thinkingEnabled", false) === true;
+        persistChat = PluginService.loadPluginData(pluginId, "persistChat", false) === true;
+
+        // Clear chat when provider changes to avoid stale index map entries
+        if (oldProvider && oldProvider !== provider)
+            clearChat();
 
         // Set baseUrl based on provider
         updateBaseUrl();
@@ -271,6 +290,55 @@ Item {
         isStreaming = false;
         activeStreamId = "";
         lastUserText = "";
+        // Clear persisted history too
+        if (persistChat) {
+            PluginService.savePluginData(pluginId, "chatHistory", "");
+            PluginService.savePluginData(pluginId, "chatVariants", "");
+        }
+    }
+
+    function saveChatHistory() {
+        if (!persistChat) return;
+        var msgs = [];
+        for (var i = 0; i < messagesModel.count; i++) {
+            var m = messagesModel.get(i);
+            if (m.status === "streaming") continue; // Don't persist incomplete messages
+            msgs.push({
+                role: m.role, content: m.content, thinking: m.thinking || "",
+                id: m.id, timestamp: m.timestamp, status: m.status || "ok",
+                variantIndex: m.variantIndex || 0, variantCount: m.variantCount || 1,
+                modelName: m.modelName || ""
+            });
+        }
+        PluginService.savePluginData(pluginId, "chatHistory", JSON.stringify(msgs));
+        PluginService.savePluginData(pluginId, "chatVariants", JSON.stringify(variantStore));
+    }
+
+    function loadChatHistory() {
+        if (!persistChat) return;
+        try {
+            var raw = PluginService.loadPluginData(pluginId, "chatHistory", "");
+            if (!raw) return;
+            var msgs = JSON.parse(raw);
+            if (!Array.isArray(msgs) || msgs.length === 0) return;
+            messagesModel.clear();
+            messageIndexMap = ({});
+            for (var i = 0; i < msgs.length; i++) {
+                var m = msgs[i];
+                messagesModel.append({
+                    role: m.role, content: m.content, thinking: m.thinking || "",
+                    id: m.id, timestamp: m.timestamp, status: m.status || "ok",
+                    variantIndex: m.variantIndex || 0, variantCount: m.variantCount || 1,
+                    modelName: m.modelName || ""
+                });
+                messageIndexMap[m.id] = messagesModel.count - 1;
+                if (m.role === "user") lastUserText = m.content;
+            }
+            var vRaw = PluginService.loadPluginData(pluginId, "chatVariants", "");
+            if (vRaw) variantStore = JSON.parse(vRaw);
+        } catch (e) {
+            console.warn("Ephemera: failed to load chat history:", e);
+        }
     }
 
     function sendMessage(text) {
@@ -294,8 +362,8 @@ Item {
 
         var msgId = last.id;
 
-        // Save current content as a variant
-        _saveVariant(msgId, last.variantIndex, last.content, last.thinking);
+        // Save current content as a variant (with its model name)
+        _saveVariant(msgId, last.variantIndex, last.content, last.thinking, last.modelName);
 
         // Increment variant count and set index to new slot
         var newCount = last.variantCount + 1;
@@ -303,10 +371,11 @@ Item {
         messagesModel.setProperty(lastIdx, "variantCount", newCount);
         messagesModel.setProperty(lastIdx, "variantIndex", newIndex);
 
-        // Reset message for new streaming
+        // Reset message for new streaming with current model
         messagesModel.setProperty(lastIdx, "content", "");
         messagesModel.setProperty(lastIdx, "thinking", "");
         messagesModel.setProperty(lastIdx, "status", "streaming");
+        messagesModel.setProperty(lastIdx, "modelName", model);
 
         activeStreamId = msgId;
         isStreaming = true;
@@ -319,10 +388,16 @@ Item {
         _launchCurl();
     }
 
-    function _saveVariant(msgId, index, content, thinking) {
+    readonly property int maxVariantsPerMessage: 10
+
+    function _saveVariant(msgId, index, content, thinking, variantModel) {
         var store = variantStore;
         if (!store[msgId]) store[msgId] = [];
-        store[msgId][index] = { content: content || "", thinking: thinking || "" };
+        store[msgId][index] = { content: content || "", thinking: thinking || "", modelName: variantModel || "" };
+        // Evict oldest variants if cap exceeded
+        while (store[msgId].length > maxVariantsPerMessage) {
+            store[msgId].shift();
+        }
         variantStore = store;
     }
 
@@ -337,6 +412,7 @@ Item {
             messagesModel.setProperty(idx, "content", _streamContent);
             messagesModel.setProperty(idx, "thinking", _streamThinking);
             messagesModel.setProperty(idx, "variantIndex", newIndex);
+            messagesModel.setProperty(idx, "modelName", model); // Current model for live stream
             messagesModel.setProperty(idx, "status", "streaming");
             return;
         }
@@ -349,27 +425,69 @@ Item {
         messagesModel.setProperty(idx, "content", variant.content);
         messagesModel.setProperty(idx, "thinking", variant.thinking);
         messagesModel.setProperty(idx, "variantIndex", newIndex);
+        if (variant.modelName)
+            messagesModel.setProperty(idx, "modelName", variant.modelName);
         // Show as "ok" when viewing a completed variant (even if another is streaming)
         if (isStreaming && activeStreamId === msgId) {
             messagesModel.setProperty(idx, "status", "ok");
         }
     }
 
-    function exportConversation() {
+    function buildConversationMarkdown() {
         var lines = [];
         for (var i = 0; i < messagesModel.count; i++) {
             var m = messagesModel.get(i);
             var label = m.role === "user" ? "You" : "Assistant";
             lines.push("### " + label + "\n\n" + m.content);
         }
-        var text = lines.join("\n\n---\n\n");
+        return lines.join("\n\n---\n\n");
+    }
+
+    function exportConversation() {
+        var text = buildConversationMarkdown();
         Quickshell.execDetached(["wl-copy", text]);
+    }
+
+    function exportConversationToFile() {
+        var text = buildConversationMarkdown();
+        var timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        var filename = Quickshell.env("HOME") + "/ephemera-chat-" + timestamp + ".md";
+        exportFileWriter.command = ["tee", filename];
+        exportPendingBody = text;
+        exportFileWriter.stdinEnabled = true;
+        exportFileWriter.running = true;
+        return filename;
+    }
+
+    property string exportPendingBody: ""
+    property string lastExportedFile: ""
+
+    Process {
+        id: exportFileWriter
+        running: false
+        stdinEnabled: true
+
+        onRunningChanged: {
+            if (running && root.exportPendingBody) {
+                exportFileWriter.write(root.exportPendingBody);
+                exportFileWriter.stdinEnabled = false; // EOF
+                root.exportPendingBody = "";
+            }
+        }
+
+        onExited: exitCode => {
+            if (exitCode === 0) {
+                root.lastExportedFile = exportFileWriter.command[1];
+            }
+        }
     }
 
     function cancel() {
         if (!isStreaming) return;
         var streamId = activeStreamId;
         isStreaming = false; // Prevent onExited race
+        _insideThinkTag = false; // Reset before markCancelled to avoid state leaks
+        _tagBuffer = "";
         markCancelled(streamId);
         chatFetcher.running = false;
     }
@@ -379,11 +497,11 @@ Item {
         var streamId = "assistant-" + now;
 
         var userId = "user-" + now;
-        messagesModel.append({ role: "user", content: text, thinking: "", timestamp: now, id: userId, status: "ok", variantIndex: 0, variantCount: 1 });
+        messagesModel.append({ role: "user", content: text, thinking: "", timestamp: now, id: userId, status: "ok", variantIndex: 0, variantCount: 1, modelName: "" });
         messageIndexMap[userId] = messagesModel.count - 1;
         lastUserText = text;
 
-        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now + 1, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1 });
+        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now + 1, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1, modelName: model });
         messageIndexMap[streamId] = messagesModel.count - 1;
         activeStreamId = streamId;
         isStreaming = true;
@@ -629,9 +747,10 @@ Item {
 
         if (lastHttpStatus >= 400 && isStreaming) {
             var preview = bodyText.length > 600 ? bodyText.slice(0, 600) + "\u2026" : bodyText;
-            var msg = preview
-                ? ("Request failed (HTTP " + lastHttpStatus + "): " + preview)
-                : ("Request failed (HTTP " + lastHttpStatus + ")");
+            var hint = httpErrorHint(lastHttpStatus);
+            var msg = "Request failed (HTTP " + lastHttpStatus + ")";
+            if (hint) msg += "\n" + hint;
+            if (preview) msg += "\n\n" + preview;
             markError(activeStreamId, msg);
             return;
         }
@@ -682,6 +801,18 @@ Item {
         return "";
     }
 
+    function httpErrorHint(status) {
+        switch (status) {
+        case 401: return "Check your API key \u2014 it may be missing or invalid.";
+        case 403: return "Access denied \u2014 verify your API key has the required permissions.";
+        case 404: return "Endpoint not found \u2014 check the model name and base URL.";
+        case 429: return "Rate limited \u2014 wait a moment and try again.";
+        case 500: return "Server error \u2014 the provider may be experiencing issues.";
+        case 503: return "Service unavailable \u2014 the provider may be overloaded.";
+        default: return "";
+        }
+    }
+
     // ─── Message helpers ───────────────────────────────────────────
 
     function findIndexById(msgId) {
@@ -692,7 +823,7 @@ Item {
         var idx = findIndexById(streamId);
         if (idx >= 0) {
             _streamContent = message;
-            _saveVariant(streamId, _streamVariantIndex, _streamContent, _streamThinking);
+            _saveVariant(streamId, _streamVariantIndex, _streamContent, _streamThinking, model);
             var msg = messagesModel.get(idx);
             if (msg.variantIndex === _streamVariantIndex) {
                 messagesModel.setProperty(idx, "content", message);
@@ -717,7 +848,7 @@ Item {
 
         var idx = findIndexById(streamId);
         if (idx >= 0) {
-            _saveVariant(streamId, _streamVariantIndex, _streamContent, _streamThinking);
+            _saveVariant(streamId, _streamVariantIndex, _streamContent, _streamThinking, model);
             var msg = messagesModel.get(idx);
             if (msg.variantIndex === _streamVariantIndex) {
                 messagesModel.setProperty(idx, "content", _streamContent);
@@ -727,6 +858,7 @@ Item {
         }
         isStreaming = false;
         activeStreamId = "";
+        saveChatHistory();
     }
 
     function updateStreamContent(streamId, deltaText) {
@@ -780,7 +912,7 @@ Item {
 
         var idx = findIndexById(streamId);
         if (idx >= 0) {
-            _saveVariant(streamId, _streamVariantIndex, _streamContent, _streamThinking);
+            _saveVariant(streamId, _streamVariantIndex, _streamContent, _streamThinking, model);
             var msg = messagesModel.get(idx);
             // If still viewing the streaming variant, update content from buffers
             if (msg.variantIndex === _streamVariantIndex) {
@@ -814,10 +946,11 @@ Item {
             property int lastLen: 0
 
             onTextChanged: {
-                // Cap buffer at ~10MB to prevent memory exhaustion from rogue endpoints
-                if (text.length > 10485760) {
+                // Cap buffer early to prevent memory exhaustion from rogue endpoints.
+                // Check lastLen (pre-append size) so we reject before processing.
+                if (lastLen > 5242880) { // 5MB
                     chatFetcher.running = false;
-                    root.markError(root.activeStreamId, "Response exceeded maximum buffer size.");
+                    root.markError(root.activeStreamId, "Response exceeded maximum buffer size (5 MB).");
                     return;
                 }
                 var newData = text.substring(lastLen);

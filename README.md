@@ -1,8 +1,8 @@
 # Ephemera
 
-Ephemeral AI chat for your desktop — ask quick questions, keep nothing.
+AI chat for your desktop — ask quick questions, keep nothing (or everything).
 
-Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plugin that adds an AI chat slideout panel to your Wayland desktop shell. All conversations live in memory and disappear when you close the panel or reload the shell.
+Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plugin that adds an AI chat slideout panel to your Wayland desktop shell. By default, all conversations live in memory and disappear when you close the panel. Enable **Save Chat History** in settings to persist conversations across sessions.
 
 ## Features
 
@@ -12,10 +12,10 @@ Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plug
 - **Ollama auto-management** — automatically starts `ollama serve` if not running, discovers available models, and re-checks connectivity each time the panel opens
 - **Markdown rendering** — assistant responses rendered as rich text with code blocks, tables, lists, and blockquotes (deferred until streaming completes for performance)
 - **System prompt presets** — quick-select presets (Concise, Code Expert, Translator, Writing Editor) or write a custom system prompt
-- **Regenerate with variant pagination** — retry the last assistant response with a single click; previous responses are preserved and navigable with `< 1/2 >` pagination arrows (ChatGPT-style), even mid-stream
-- **Export conversation** — copy the full conversation as markdown to clipboard
-- **Zero persistence** — messages are never written to disk; API keys are read from environment variables only
-- **Security-first** — request bodies sent via stdin (never in `/proc/cmdline`), API keys passed as headers (not URL params), link scheme restricted to http/https, custom URLs validated, stdout buffer capped
+- **Regenerate with variant pagination** — retry the last assistant response with a single click; previous responses are preserved and navigable with `< 1/2 >` pagination arrows (ChatGPT-style), even mid-stream; each variant remembers which model generated it, so switching models between regenerations shows the correct model chip per variant
+- **Export conversation** — copy the full conversation as markdown to clipboard, or save to a `.md` file in your home directory
+- **Optional persistence** — messages are ephemeral by default; enable **Save Chat History** in settings to persist conversations across sessions (API keys are never stored)
+- **Security-first** — request bodies sent via stdin (never in `/proc/cmdline`), API keys passed as headers (not URL params), link text and URLs HTML-escaped, link scheme restricted to http/https, custom URLs validated, stdout buffer capped at 5 MB
 
 ## Requirements
 
@@ -55,6 +55,7 @@ All settings are configurable from the in-app settings panel (gear icon):
 - **Max Tokens** — 256 to 16,384
 - **Context Turns** — number of recent conversation turns sent to the API (2–100)
 - **Request Timeout** — max time for a streaming response (30–600s, default 300s)
+- **Save Chat History** — persist conversations across sessions (off by default)
 
 Settings are persisted via Quickshell's `PluginService`. API keys are never stored.
 
@@ -63,9 +64,96 @@ Settings are persisted via Quickshell's `PluginService`. API keys are never stor
 Open the slideout panel via your shell's configured keybind or action. Type a message and press **Enter** to send (Shift+Enter for newline). Press **Escape** to dismiss the panel.
 
 - **Copy** — hover over an assistant message to reveal the copy button (shows a checkmark on success)
-- **Regenerate** — hover over the last assistant message to reveal the regenerate button; after regenerating, use the `<` `>` arrows to navigate between response variants
-- **Export** — click the copy icon in the header toolbar to copy the full conversation as markdown
+- **Regenerate** — hover over the last assistant message to reveal the regenerate button; after regenerating, use the `<` `>` arrows to navigate between response variants; each variant's model chip shows which model generated it
+- **Export** — click the copy icon in the header to copy the conversation as markdown, or the save icon to write it to `~/ephemera-chat-<timestamp>.md`
 - **Expand** — use the expand button to widen the panel; model chips in the header and message bubbles expand to show full model names
+
+## Known Limitations
+
+- **Multi-screen**: The chat service is shared across all screens. Opening the panel on two monitors shows the same conversation.
+
+## Troubleshooting
+
+### Ollama not detected
+
+Ephemera pings `http://localhost:11434/api/tags` on startup. If Ollama isn't found:
+
+1. Verify Ollama is installed: `ollama --version`
+2. Pull at least one model: `ollama pull llama3.2`
+3. Ephemera will auto-start `ollama serve` if it isn't running — check that the Ollama binary is in your `$PATH` when Quickshell starts
+4. If using a custom URL, verify it in Settings → Provider → Ollama URL
+5. Use the **Connect to Ollama** button in Settings to retry
+
+### API key not detected
+
+API keys are read from environment variables. They must be set **before** Quickshell starts.
+
+```bash
+# In your shell profile (~/.bashrc, ~/.zshrc, etc.):
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export GEMINI_API_KEY="AI..."
+export EPHEMERA_API_KEY="..."   # for custom providers
+```
+
+Check that the variable is set: `echo $OPENAI_API_KEY`
+
+If it's set but Ephemera still shows "API key not found", Quickshell may not be inheriting your shell environment. Try launching Quickshell from a terminal where the variable is set.
+
+### Empty responses
+
+- Verify the model name is correct for your provider
+- Check that streaming is supported by your endpoint
+- Increase the **Request Timeout** slider in Settings (default 300s)
+- For Ollama, ensure the model is fully downloaded: `ollama list`
+
+### Timeout errors
+
+The default timeout is 300 seconds. For large models or slow hardware, increase it in Settings → Model Parameters → Request Timeout (max 600s).
+
+## Custom Provider Examples
+
+Ephemera's "custom" provider works with any OpenAI-compatible API. Set the base URL in Settings and export `EPHEMERA_API_KEY`.
+
+### LocalAI
+
+```bash
+export EPHEMERA_API_KEY="not-needed"  # LocalAI often doesn't require a key
+```
+
+Base URL: `http://localhost:8080`
+
+### vLLM
+
+```bash
+export EPHEMERA_API_KEY="token-abc123"
+```
+
+Base URL: `http://localhost:8000`
+
+### LM Studio
+
+```bash
+export EPHEMERA_API_KEY="lm-studio"  # LM Studio ignores the key
+```
+
+Base URL: `http://localhost:1234`
+
+### OpenRouter
+
+```bash
+export EPHEMERA_API_KEY="sk-or-..."
+```
+
+Base URL: `https://openrouter.ai/api`
+
+### Groq
+
+```bash
+export EPHEMERA_API_KEY="gsk_..."
+```
+
+Base URL: `https://api.groq.com/openai`
 
 ## License
 
