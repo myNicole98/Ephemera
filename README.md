@@ -1,5 +1,11 @@
 # Ephemera
 
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+![DMS Plugin](https://img.shields.io/badge/DMS-Plugin-blueviolet)
+![Wayland](https://img.shields.io/badge/Wayland-only-yellow)
+![Platform: Linux](https://img.shields.io/badge/Platform-Linux-lightgrey)
+![Version](https://img.shields.io/badge/version-0.1.0-green)
+
 AI chat for your desktop — ask quick questions, keep nothing (or everything).
 
 Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plugin that adds an AI chat slideout panel to your Wayland desktop shell. By default, all conversations live in memory and disappear when you close the panel. Enable **Save Chat History** in settings to persist conversations across sessions.

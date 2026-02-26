@@ -1,0 +1,30 @@
+# QML/Qt cache
+*.qmlc
+.qmlcache/
+*.qmlc.d
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Local notes
+.notes/
+
+# Build artifacts
+build/
+dist/
+*.o
+*.so
+
+# Logs
+*.log
+
+# Test/Debug files
+debug_output.txt
+
+# OS files
+Thumbs.db
