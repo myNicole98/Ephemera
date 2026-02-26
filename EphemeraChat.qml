@@ -13,16 +13,20 @@ Item {
     required property var aiService
     property bool showSettings: false
     property bool _settingsClosing: false
-    property bool showShutdownDialog: false
     property bool slideoutExpandable: false
     property bool slideoutExpanded: false
     signal hideRequested
     signal expandToggled
 
+    function focusInput() {
+        composer.forceActiveFocus();
+    }
+
     onVisibleChanged: {
         if (!visible) {
             showSettings = false;
             _settingsClosing = false;
+            if (aiService) aiService.scheduleIdleShutdown();
         } else {
             if (aiService) aiService.ensureOllamaReady();
             Qt.callLater(function() { composer.forceActiveFocus(); });
@@ -50,23 +54,6 @@ Item {
         if (settingsPanelLoader.item)
             settingsPanelLoader.item.opacity = 0;
         settingsCloseTimer.start();
-    }
-
-    function requestClose() {
-        if (aiService && aiService.isOllama && aiService.ollamaReady) {
-            if (aiService.ollamaWeStarted) {
-                // We started it — stop automatically
-                aiService.shutdownOllama();
-                hideRequested();
-            } else if (aiService.ollamaExternallyManaged) {
-                // External — ask user
-                showShutdownDialog = true;
-            } else {
-                hideRequested();
-            }
-        } else {
-            hideRequested();
-        }
     }
 
     Column {
@@ -153,6 +140,7 @@ Item {
             DankActionButton {
                 iconName: "content_copy"
                 tooltipText: "Copy conversation"
+                visible: root.slideoutExpanded
                 enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
                 onClicked: aiService.exportConversation()
             }
@@ -160,6 +148,7 @@ Item {
             DankActionButton {
                 iconName: "save_as"
                 tooltipText: "Save conversation as .md"
+                visible: root.slideoutExpanded
                 enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
                 onClicked: aiService.exportConversationToFile()
             }
@@ -167,8 +156,127 @@ Item {
             DankActionButton {
                 iconName: "delete_sweep"
                 tooltipText: "Clear chat"
+                visible: root.slideoutExpanded
                 enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
                 onClicked: aiService.clearChat()
+            }
+
+            DankActionButton {
+                id: overflowBtn
+                iconName: "more_vert"
+                tooltipText: "More actions"
+                visible: !root.slideoutExpanded
+                onClicked: overflowMenu.open()
+
+                Popup {
+                    id: overflowMenu
+                    x: overflowBtn.width - width
+                    y: overflowBtn.height + Theme.spacingXS
+                    width: 200
+                    padding: Theme.spacingXS
+
+                    background: Rectangle {
+                        color: Theme.surfaceContainerHighest
+                        radius: Theme.cornerRadius
+                        border.color: Theme.outline
+                        border.width: 1
+                    }
+
+                    Column {
+                        width: parent.width
+                        spacing: 0
+
+                        ItemDelegate {
+                            width: parent.width
+                            height: 36
+                            enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
+                            onClicked: { aiService.exportConversation(); overflowMenu.close(); }
+                            background: Rectangle {
+                                color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : "transparent"
+                                radius: Theme.cornerRadius
+                            }
+
+                            contentItem: Row {
+                                spacing: Theme.spacingS
+                                anchors.verticalCenter: parent.verticalCenter
+
+                                DankIcon {
+                                    name: "content_copy"
+                                    size: 16
+                                    color: parent.parent.enabled ? Theme.surfaceText : Theme.surfaceTextMedium
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                StyledText {
+                                    text: "Copy conversation"
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: parent.parent.enabled ? Theme.surfaceText : Theme.surfaceTextMedium
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+                        }
+
+                        ItemDelegate {
+                            width: parent.width
+                            height: 36
+                            enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
+                            onClicked: { aiService.exportConversationToFile(); overflowMenu.close(); }
+                            background: Rectangle {
+                                color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : "transparent"
+                                radius: Theme.cornerRadius
+                            }
+
+                            contentItem: Row {
+                                spacing: Theme.spacingS
+                                anchors.verticalCenter: parent.verticalCenter
+
+                                DankIcon {
+                                    name: "save_as"
+                                    size: 16
+                                    color: parent.parent.enabled ? Theme.surfaceText : Theme.surfaceTextMedium
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                StyledText {
+                                    text: "Save as .md"
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: parent.parent.enabled ? Theme.surfaceText : Theme.surfaceTextMedium
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+                        }
+
+                        ItemDelegate {
+                            width: parent.width
+                            height: 36
+                            enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
+                            onClicked: { aiService.clearChat(); overflowMenu.close(); }
+                            background: Rectangle {
+                                color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : "transparent"
+                                radius: Theme.cornerRadius
+                            }
+
+                            contentItem: Row {
+                                spacing: Theme.spacingS
+                                anchors.verticalCenter: parent.verticalCenter
+
+                                DankIcon {
+                                    name: "delete_sweep"
+                                    size: 16
+                                    color: parent.parent.enabled ? Theme.surfaceText : Theme.surfaceTextMedium
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+
+                                StyledText {
+                                    text: "Clear chat"
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    color: parent.parent.enabled ? Theme.surfaceText : Theme.surfaceTextMedium
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             DankActionButton {
@@ -192,7 +300,7 @@ Item {
                 iconSize: Theme.iconSize - 4
                 iconColor: Theme.surfaceText
                 tooltipText: "Close"
-                onClicked: root.requestClose()
+                onClicked: root.hideRequested()
             }
         }
 
@@ -447,7 +555,7 @@ Item {
 
                         Keys.onReleased: event => {
                             if (event.key === Qt.Key_Escape) {
-                                requestClose();
+                                hideRequested();
                                 event.accepted = true;
                             } else if (event.key === Qt.Key_Return && !(event.modifiers & Qt.ShiftModifier)) {
                                 sendCurrentMessage();
@@ -599,82 +707,4 @@ Item {
         }
     }
 
-    // -- Ollama shutdown confirmation dialog --
-    Rectangle {
-        id: shutdownDialog
-        anchors.fill: parent
-        color: Theme.withAlpha(Theme.onSurface, 0.5)
-        visible: opacity > 0
-        opacity: showShutdownDialog ? 1.0 : 0.0
-        z: 200
-
-        Behavior on opacity {
-            NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
-        }
-
-        MouseArea {
-            anchors.fill: parent
-            onClicked: showShutdownDialog = false
-        }
-
-        Rectangle {
-            anchors.centerIn: parent
-            width: Math.min(320, parent.width - Theme.spacingL * 2)
-            height: dialogContent.implicitHeight + Theme.spacingL * 2
-            radius: Theme.cornerRadius * 2
-            color: Theme.surfaceContainerHigh
-            border.color: Theme.outlineMedium
-            border.width: 1
-
-            // Prevent click-through to scrim
-            MouseArea { anchors.fill: parent }
-
-            Column {
-                id: dialogContent
-                anchors.centerIn: parent
-                width: parent.width - Theme.spacingL * 2
-                spacing: Theme.spacingM
-
-                StyledText {
-                    text: "Stop Ollama?"
-                    font.pixelSize: Theme.fontSizeLarge
-                    font.weight: Font.Medium
-                    color: Theme.surfaceText
-                    width: parent.width
-                }
-
-                StyledText {
-                    text: "Ollama was already running before Ephemera started. Do you want to stop the server?"
-                    font.pixelSize: Theme.fontSizeMedium
-                    color: Theme.surfaceTextMedium
-                    width: parent.width
-                    wrapMode: Text.Wrap
-                }
-
-                Row {
-                    spacing: Theme.spacingS
-                    anchors.right: parent.right
-
-                    DankButton {
-                        text: "Keep running"
-                        onClicked: {
-                            showShutdownDialog = false;
-                            hideRequested();
-                        }
-                    }
-
-                    DankButton {
-                        text: "Stop Ollama"
-                        backgroundColor: Theme.error
-                        textColor: Theme.onPrimary
-                        onClicked: {
-                            aiService.forceShutdownExternalOllama();
-                            showShutdownDialog = false;
-                            hideRequested();
-                        }
-                    }
-                }
-            }
-        }
-    }
 }

@@ -345,10 +345,76 @@ Item {
                                         }
 
                                         DankButton {
-                                            text: aiService.ollamaReady ? "Reconnect Ollama" : "Connect to Ollama"
-                                            iconName: "power"
+                                            text: aiService.ollamaReady ? "Stop Ollama" : "Start Ollama"
+                                            iconName: aiService.ollamaReady ? "stop" : "power"
                                             width: parent.width
-                                            onClicked: aiService.ensureOllamaReady()
+                                            backgroundColor: aiService.ollamaReady ? Theme.error : undefined
+                                            textColor: aiService.ollamaReady ? Theme.onPrimary : undefined
+                                            onClicked: {
+                                                if (aiService.ollamaReady) {
+                                                    if (aiService.ollamaWeStarted)
+                                                        aiService.shutdownOllama();
+                                                    else
+                                                        aiService.forceShutdownExternalOllama();
+                                                } else {
+                                                    aiService.ensureOllamaReady();
+                                                }
+                                            }
+                                        }
+
+                                        // Idle auto-stop timeout
+                                        Row {
+                                            width: parent.width
+                                            spacing: Theme.spacingM
+
+                                            DankIcon {
+                                                name: "timer_off"
+                                                size: Theme.iconSize
+                                                color: Theme.primary
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+
+                                            Column {
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                spacing: Theme.spacingXS
+                                                width: parent.width - parent.spacing - Theme.iconSize
+
+                                                StyledText {
+                                                    text: "Idle Auto-Stop: " + (aiService.ollamaIdleMinutes === 0 ? "Never" : aiService.ollamaIdleMinutes + " min")
+                                                    font.pixelSize: Theme.fontSizeMedium
+                                                    font.weight: Font.Medium
+                                                    color: Theme.surfaceText
+                                                }
+
+                                                StyledText {
+                                                    text: "Auto-stop Ollama after inactivity (only if we started it)"
+                                                    font.pixelSize: Theme.fontSizeSmall
+                                                    color: Theme.surfaceVariantText
+                                                    wrapMode: Text.WordWrap
+                                                    width: parent.width
+                                                }
+                                            }
+                                        }
+
+                                        DankDropdown {
+                                            width: parent.width
+                                            options: ["Never", "5 min", "10 min", "15 min", "30 min"]
+                                            currentValue: {
+                                                switch (aiService.ollamaIdleMinutes) {
+                                                case 0: return "Never";
+                                                case 5: return "5 min";
+                                                case 10: return "10 min";
+                                                case 15: return "15 min";
+                                                case 30: return "30 min";
+                                                default: return "5 min";
+                                                }
+                                            }
+                                            onValueChanged: value => {
+                                                var map = { "Never": 0, "5 min": 5, "10 min": 10, "15 min": 15, "30 min": 30 };
+                                                var mins = map[value] !== undefined ? map[value] : 5;
+                                                aiService.ollamaIdleMinutes = mins;
+                                                aiService.saveSettingValue("ollamaIdleMinutes", mins);
+                                            }
                                         }
                                     }
                                 }

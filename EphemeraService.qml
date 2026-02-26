@@ -45,6 +45,8 @@ Item {
     property bool ollamaReady: false
     property int ollamaRetries: 0
     readonly property int ollamaMaxRetries: 15
+    property bool _shuttingDown: false
+    property int ollamaIdleMinutes: 5  // 0 = never auto-stop
 
     readonly property bool isOllama: provider === "ollama"
     readonly property bool needsApiKey: provider !== "ollama"
@@ -59,31 +61,47 @@ Item {
 
     Component.onDestruction: {
         saveChatHistory();
-        // Only stop Ollama if we started it
-        if (ollamaWeStarted && ollamaProcess.running) {
+        if (ollamaWeStarted) {
             ollamaProcess.running = false;
+            ollamaKiller.running = true;
         }
     }
 
     function shutdownOllama() {
-        if (ollamaWeStarted && ollamaProcess.running) {
+        _shuttingDown = true;
+        ollamaIdleTimer.stop();
+        retryTimer.stop();
+        if (ollamaWeStarted && ollamaProcess.running)
             ollamaProcess.running = false;
-        }
+        ollamaKiller.running = true;
         ollamaWeStarted = false;
+        ollamaStartPending = false;
         ollamaReady = false;
     }
 
     function forceShutdownExternalOllama() {
+        _shuttingDown = true;
+        ollamaIdleTimer.stop();
+        retryTimer.stop();
         ollamaKiller.running = true;
         ollamaReady = false;
         ollamaExternallyManaged = false;
+        ollamaWeStarted = false;
+        ollamaStartPending = false;
     }
 
     function ensureOllamaReady() {
-        if (!isOllama || ollamaReady) return;
+        if (!isOllama) return;
+        _shuttingDown = false;
+        ollamaIdleTimer.stop();
         retryTimer.stop();
         ollamaRetries = 0;
         pingOllama();
+    }
+
+    function scheduleIdleShutdown() {
+        if (!isOllama || !ollamaWeStarted || ollamaIdleMinutes <= 0) return;
+        ollamaIdleTimer.restart();
     }
 
     // ─── Ollama lifecycle ───────────────────────────────────────────
@@ -96,6 +114,10 @@ Item {
             if (running && root.ollamaStartPending) {
                 root.ollamaWeStarted = true;
                 root.ollamaStartPending = false;
+            } else if (!running && root.ollamaWeStarted && !root._shuttingDown) {
+                root.ollamaWeStarted = false;
+                root.ollamaStartPending = false;
+                root.ollamaReady = false;
             }
         }
     }
@@ -140,7 +162,10 @@ Item {
     }
 
     function handlePingFailed() {
-        if (ollamaReady) return; // Already connected
+        if (ollamaReady) {
+            ollamaReady = false;
+            ollamaExternallyManaged = false;
+        }
 
         if (!ollamaWeStarted && !ollamaStartPending && ollamaRetries === 0) {
             // First failure — try starting Ollama
@@ -159,6 +184,16 @@ Item {
         interval: 1000
         repeat: false
         onTriggered: pingOllama()
+    }
+
+    Timer {
+        id: ollamaIdleTimer
+        interval: root.ollamaIdleMinutes * 60 * 1000
+        repeat: false
+        onTriggered: {
+            if (root.ollamaWeStarted && !root.isStreaming)
+                root.shutdownOllama();
+        }
     }
 
     // ─── Ollama model discovery ─────────────────────────────────────
@@ -223,6 +258,7 @@ Item {
         systemPrompt = String(PluginService.loadPluginData(pluginId, "systemPrompt", "")).trim();
         thinkingEnabled = PluginService.loadPluginData(pluginId, "thinkingEnabled", false) === true;
         persistChat = PluginService.loadPluginData(pluginId, "persistChat", false) === true;
+        ollamaIdleMinutes = Number(PluginService.loadPluginData(pluginId, "ollamaIdleMinutes", 5)) || 5;
 
         // Clear chat when provider changes to avoid stale index map entries
         if (oldProvider && oldProvider !== provider)
@@ -347,6 +383,7 @@ Item {
             markError(activeStreamId, "Please wait until the current response finishes.");
             return;
         }
+        ollamaIdleTimer.stop();
         lastRequestFailed = false;
         startStreaming(text.trim());
     }
@@ -354,6 +391,7 @@ Item {
     function regenerate() {
         if (isStreaming || !lastUserText) return;
         if (messagesModel.count === 0) return;
+        ollamaIdleTimer.stop();
 
         // Find the last assistant message
         var lastIdx = messagesModel.count - 1;

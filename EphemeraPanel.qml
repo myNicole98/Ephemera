@@ -20,6 +20,11 @@ PanelWindow {
 
     signal opened()
 
+    onOpened: {
+        if (contentLoader.item && contentLoader.item.focusInput)
+            contentLoader.item.focusInput();
+    }
+
     function show() {
         visible = true;
         isVisible = true;
@@ -128,6 +133,7 @@ PanelWindow {
                     anchors.margins: Theme.spacingL
 
                     Loader {
+                        id: contentLoader
                         anchors.fill: parent
                         sourceComponent: root.content
                     }
