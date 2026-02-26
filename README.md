@@ -44,17 +44,19 @@ Set the appropriate environment variable before starting Quickshell:
 
 ### Settings
 
-All settings are configurable from the in-app settings panel (gear icon):
+All settings are configurable from the in-app settings panel (tune icon):
 
 - **Provider** — ollama, openai, anthropic, gemini, or custom
 - **Model** — auto-discovered dropdown for Ollama, free-text for others
 - **Ollama URL** — defaults to `http://localhost:11434`
-- **Custom Base URL** — for OpenAI-compatible endpoints
+- **Custom Base URL** — for OpenAI-compatible endpoints (validated: http/https only, valid hostname, max 2048 chars)
+- **Extended Thinking** — toggle for Anthropic provider; enables extended thinking (forces temperature to 1.0, allocates 80% of max tokens as thinking budget)
 - **System Prompt** — prepended to every request; quick-select presets available or enter custom text
 - **Temperature** — 0.0 (focused) to 2.0 (creative)
 - **Max Tokens** — 256 to 16,384
 - **Context Turns** — number of recent conversation turns sent to the API (2–100)
 - **Request Timeout** — max time for a streaming response (30–600s, default 300s)
+- **Ollama Controls** — refresh models button, explicit start/stop button, idle auto-stop timeout (Never, 5, 10, 15, or 30 minutes; only auto-stops Ollama if the plugin started it)
 - **Save Chat History** — persist conversations across sessions (off by default)
 
 Settings are persisted via Quickshell's `PluginService`. API keys are never stored.
@@ -79,7 +81,9 @@ Open the slideout panel via your shell's configured keybind or action. Type a me
 - **Copy** — hover over an assistant message to reveal the copy button (shows a checkmark on success)
 - **Regenerate** — hover over the last assistant message to reveal the regenerate button; after regenerating, use the `<` `>` arrows to navigate between response variants; each variant's model chip shows which model generated it
 - **Export** — click the copy icon in the header to copy the conversation as markdown, or the save icon to write it to `~/ephemera-chat-<timestamp>.md`
-- **Expand** — use the expand button to widen the panel; model chips in the header and message bubbles expand to show full model names
+- **Expand** — use the expand button to widen the panel (480px → 960px); model chips in the header and message bubbles expand to show full model names
+- **Error hints** — HTTP errors display contextual suggestions (e.g., 401 → check API key, 429 → rate limited)
+- **Missing API key banner** — when a required API key is absent, a prominent banner in the chat area shows which environment variable to set
 
 ## Known Limitations
 

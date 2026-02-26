@@ -13,7 +13,8 @@ This guide covers everything you need to know to work on Ephemera — a Quickshe
 ```
 ephemera/
 ├── plugin.json              # Plugin manifest (id, type, capabilities, entry point)
-├── EphemeraDaemon.qml       # Entry point — service init, per-screen slideouts, IPC handler
+├── EphemeraDaemon.qml       # Entry point — service init, per-screen panels, IPC handler
+├── EphemeraPanel.qml        # Wayland layer-shell PanelWindow — slide animation, expand/collapse, focus management
 ├── EphemeraService.qml      # Core state machine — messages, streaming, variants, Ollama lifecycle, curl
 ├── EphemeraChat.qml         # Main UI — header, message area, composer, overlays
 ├── EphemeraSettings.qml     # Settings panel — provider, model, parameters, API key status
@@ -22,6 +23,7 @@ ephemera/
 ├── Providers.js             # Pure functions — builds provider-specific curl commands (shared extractSystemPrompt helper)
 ├── Markdown.js              # Markdown-to-HTML converter with security hardening
 ├── CLAUDE.md                # AI assistant context file
+├── CONTRIBUTING.md           # Developer guide
 └── README.md                # User-facing documentation
 ```
 
@@ -42,7 +44,7 @@ EphemeraDaemon (entry point)
 │  └─ Providers.js (curl command builders per provider, shared extractSystemPrompt)
 │
 └─ Variants (one per screen)
-   └─ DankSlideout
+   └─ EphemeraPanel (PanelWindow with slide/expand animations)
       └─ EphemeraChat
          ├─ MessageList → MessageBubble (uses Markdown.js)
          ├─ Composer (auto-growing text input)
@@ -167,8 +169,8 @@ ollama serve &
 - Missing API key banner shows which env var to set (visible in chat area, not just header pill)
 - "Connect to Ollama" button in settings triggers reconnect
 - Save Chat History toggle persists messages across sessions; clearing chat also clears persisted data
-- Close button handles Ollama shutdown (auto-stop if plugin started it, dialog if external)
-- Escape key triggers close flow (same as close button)
+- All dismiss actions (close button, Escape, Mod+A) only hide the panel — Ollama keeps running; idle auto-stop handles cleanup if the plugin started it
+- Escape key hides panel (same as close button — no shutdown dialog)
 - Ctrl+L clears chat (blocked during streaming)
 - Ctrl+N clears chat and composer (blocked during streaming)
 - Ctrl+Shift+S toggles settings overlay
