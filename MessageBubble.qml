@@ -104,6 +104,7 @@ Item {
         radius: Theme.cornerRadius
         color: {
             if (root.isUser) return root.userBubbleFill;
+            if (root.status === "error") return Theme.withAlpha(Theme.error, 0.04);
             return hoverHandler.hovered ? Qt.lighter(root.assistantBubbleFill, 1.08) : root.assistantBubbleFill;
         }
         border.color: status === "error" ? Theme.error : (root.isUser ? root.userBubbleBorder : root.assistantBubbleBorder)
@@ -371,13 +372,38 @@ Item {
                 visible: root.thinking.length > 0
             }
 
-            StyledText {
+            // Warning banner for errors
+            Rectangle {
                 visible: root.status === "error"
-                text: "Error"
-                font.pixelSize: Theme.fontSizeSmall
-                font.weight: Font.Medium
-                color: Theme.error
                 width: parent.width
+                height: visible ? warningRow.implicitHeight + Theme.spacingS * 2 : 0
+                radius: Theme.cornerRadius * 0.75
+                color: Theme.withAlpha(Theme.error, 0.08)
+                border.color: Theme.withAlpha(Theme.error, 0.3)
+                border.width: 1
+
+                Row {
+                    id: warningRow
+                    x: Theme.spacingS
+                    y: Theme.spacingS
+                    width: parent.width - Theme.spacingS * 2
+                    spacing: Theme.spacingS
+
+                    DankIcon {
+                        name: "warning"
+                        size: 16
+                        color: Theme.error
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    StyledText {
+                        text: "Provider not connected"
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.weight: Font.Medium
+                        color: Theme.error
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
             }
 
             TextArea {

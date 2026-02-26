@@ -317,6 +317,25 @@ Item {
         }
     }
 
+    function _envVarForProvider(prov) {
+        switch (prov) {
+        case "anthropic": return "ANTHROPIC_API_KEY";
+        case "gemini": return "GEMINI_API_KEY";
+        case "openai": return "OPENAI_API_KEY";
+        default: return "EPHEMERA_API_KEY";
+        }
+    }
+
+    function _providerDisplayName(prov) {
+        switch (prov) {
+        case "anthropic": return "Anthropic";
+        case "gemini": return "Gemini";
+        case "openai": return "OpenAI";
+        case "ollama": return "Ollama";
+        default: return "custom provider";
+        }
+    }
+
     // ─── Chat (ephemeral, in-memory only) ──────────────────────────
 
     function clearChat() {
@@ -556,9 +575,10 @@ Item {
         var result = buildCurlCommand(payload);
         if (!result) {
             if (provider === "ollama") {
-                markError(activeStreamId, ollamaReady ? "No Ollama model selected." : "Ollama is not running. Check that ollama is installed.");
+                markError(activeStreamId, ollamaReady ? "No Ollama model selected." : "Ollama is not running. Check that ollama is installed and running.");
             } else {
-                markError(activeStreamId, "No API key found. Set the appropriate environment variable.");
+                var envVar = _envVarForProvider(provider);
+                markError(activeStreamId, "No API key found.\nSet the " + envVar + " environment variable to connect to " + _providerDisplayName(provider) + ".");
             }
             return;
         }
@@ -793,8 +813,18 @@ Item {
             return;
         }
 
-        if (isStreaming)
+        if (isStreaming) {
+            // No HTTP status and no content — curl failed at the transport level
+            // (e.g., connection refused, DNS failure, timeout)
+            if (lastHttpStatus === 0 && _streamContent.length === 0) {
+                var connMsg = provider === "ollama"
+                    ? "Could not connect to Ollama.\nMake sure Ollama is running at " + ollamaUrl + "."
+                    : "Could not connect to " + _providerDisplayName(provider) + ".\nCheck your network connection and provider settings.";
+                markError(activeStreamId, connMsg);
+                return;
+            }
             finalizeStream(activeStreamId);
+        }
     }
 
     function extractNonStreamingAssistantText(bodyText) {
@@ -848,6 +878,18 @@ Item {
         case 500: return "Server error \u2014 the provider may be experiencing issues.";
         case 503: return "Service unavailable \u2014 the provider may be overloaded.";
         default: return "";
+        }
+    }
+
+    function _curlExitHint(exitCode) {
+        switch (exitCode) {
+        case 6: return "Could not resolve host.\nCheck the provider URL and your DNS settings.";
+        case 7: return provider === "ollama"
+            ? "Connection refused \u2014 Ollama appears to be down.\nMake sure Ollama is running at " + ollamaUrl + "."
+            : "Connection refused \u2014 " + _providerDisplayName(provider) + " is unreachable.";
+        case 28: return "Request timed out.\nThe provider took too long to respond.";
+        case 35: return "TLS/SSL connection error.\nCheck the provider URL and your network.";
+        default: return "Request failed (exit code " + exitCode + ").";
         }
     }
 
@@ -1003,7 +1045,7 @@ Item {
 
         onExited: exitCode => {
             if (exitCode !== 0 && root.isStreaming) {
-                markError(root.activeStreamId, "Request failed (exit " + exitCode + ")");
+                markError(root.activeStreamId, root._curlExitHint(exitCode));
             }
         }
     }

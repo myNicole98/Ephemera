@@ -348,8 +348,8 @@ Item {
                                             text: aiService.ollamaReady ? "Stop Ollama" : "Start Ollama"
                                             iconName: aiService.ollamaReady ? "stop" : "power"
                                             width: parent.width
-                                            backgroundColor: aiService.ollamaReady ? Theme.error : undefined
-                                            textColor: aiService.ollamaReady ? Theme.onPrimary : undefined
+                                            backgroundColor: aiService.ollamaReady ? Theme.error : Theme.primary
+                                            textColor: Theme.onPrimary
                                             onClicked: {
                                                 if (aiService.ollamaReady) {
                                                     if (aiService.ollamaWeStarted)
