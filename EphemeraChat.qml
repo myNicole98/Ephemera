@@ -142,7 +142,10 @@ Item {
                 tooltipText: "Copy conversation"
                 visible: root.slideoutExpanded
                 enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                onClicked: aiService.exportConversation()
+                onClicked: {
+                    aiService.exportConversation();
+                    showToast("Conversation copied to clipboard");
+                }
             }
 
             DankActionButton {
@@ -150,7 +153,10 @@ Item {
                 tooltipText: "Save conversation as .md"
                 visible: root.slideoutExpanded
                 enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                onClicked: aiService.exportConversationToFile()
+                onClicked: {
+                    var file = aiService.exportConversationToFile();
+                    showToast("Saved to " + file.split("/").pop());
+                }
             }
 
             DankActionButton {
@@ -158,7 +164,7 @@ Item {
                 tooltipText: "Clear chat"
                 visible: root.slideoutExpanded
                 enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                onClicked: aiService.clearChat()
+                onClicked: clearConfirmDialog.open()
             }
 
             DankActionButton {
@@ -190,7 +196,7 @@ Item {
                             width: parent.width
                             height: 36
                             enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                            onClicked: { aiService.exportConversation(); overflowMenu.close(); }
+                            onClicked: { aiService.exportConversation(); showToast("Conversation copied to clipboard"); overflowMenu.close(); }
                             background: Rectangle {
                                 color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : "transparent"
                                 radius: Theme.cornerRadius
@@ -220,7 +226,7 @@ Item {
                             width: parent.width
                             height: 36
                             enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                            onClicked: { aiService.exportConversationToFile(); overflowMenu.close(); }
+                            onClicked: { var f = aiService.exportConversationToFile(); showToast("Saved to " + f.split("/").pop()); overflowMenu.close(); }
                             background: Rectangle {
                                 color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : "transparent"
                                 radius: Theme.cornerRadius
@@ -250,7 +256,7 @@ Item {
                             width: parent.width
                             height: 36
                             enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                            onClicked: { aiService.clearChat(); overflowMenu.close(); }
+                            onClicked: { clearConfirmDialog.open(); overflowMenu.close(); }
                             background: Rectangle {
                                 color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : "transparent"
                                 radius: Theme.cornerRadius
@@ -323,6 +329,7 @@ Item {
                 canRegenerate: !aiService.isStreaming && aiService.lastUserText.length > 0
                 onRegenerateRequested: aiService.regenerate()
                 onVariantChangeRequested: (msgId, newIndex) => aiService.switchVariant(msgId, newIndex)
+                onEditRequested: (msgId, newText) => aiService.editAndRegenerate(msgId, newText)
             }
 
             // Missing API key banner
@@ -553,7 +560,7 @@ Item {
                         topPadding: 0
                         bottomPadding: 0
 
-                        Keys.onReleased: event => {
+                        Keys.onPressed: event => {
                             if (event.key === Qt.Key_Escape) {
                                 hideRequested();
                                 event.accepted = true;
@@ -564,7 +571,8 @@ Item {
                                 sendCurrentMessage();
                                 event.accepted = true;
                             } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_L) {
-                                if (!aiService.isStreaming) aiService.clearChat();
+                                if (!aiService.isStreaming && (aiService.messageCount || 0) > 0)
+                                    clearConfirmDialog.open();
                                 composer.forceActiveFocus();
                                 event.accepted = true;
                             } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_N) {
@@ -581,19 +589,6 @@ Item {
                             } else if (event.key === Qt.Key_Up && composer.text.length === 0 && aiService.lastUserText.length > 0) {
                                 composer.text = aiService.lastUserText;
                                 composer.cursorPosition = composer.text.length;
-                                event.accepted = true;
-                            }
-                        }
-
-                        // Prevent default behavior for handled shortcuts
-                        Keys.onPressed: event => {
-                            if (event.key === Qt.Key_Return && !(event.modifiers & Qt.ShiftModifier)) {
-                                event.accepted = true;
-                            } else if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_L || event.key === Qt.Key_N)) {
-                                event.accepted = true;
-                            } else if ((event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) === (Qt.ControlModifier | Qt.ShiftModifier) && event.key === Qt.Key_S) {
-                                event.accepted = true;
-                            } else if (event.key === Qt.Key_Up && composer.text.length === 0 && aiService.lastUserText.length > 0) {
                                 event.accepted = true;
                             }
                         }
@@ -656,6 +651,105 @@ Item {
 
                     Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
                     Behavior on scale { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                }
+            }
+        }
+    }
+
+    // -- Toast notification --
+    property string _toastMessage: ""
+
+    Rectangle {
+        id: toast
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: composerRow.height + Theme.spacingL
+        width: toastText.implicitWidth + Theme.spacingL * 2
+        height: 36
+        radius: 18
+        color: Theme.withAlpha(Theme.surfaceContainerHighest, 0.95)
+        border.color: Theme.outline
+        border.width: 1
+        visible: opacity > 0
+        opacity: 0
+        z: 100
+
+        Behavior on opacity {
+            NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+        }
+
+        StyledText {
+            id: toastText
+            anchors.centerIn: parent
+            text: root._toastMessage
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.surfaceText
+        }
+
+        Timer {
+            id: toastTimer
+            interval: 2000
+            onTriggered: toast.opacity = 0
+        }
+    }
+
+    function showToast(message) {
+        _toastMessage = message;
+        toast.opacity = 1;
+        toastTimer.restart();
+    }
+
+    // -- Clear chat confirmation dialog --
+    Popup {
+        id: clearConfirmDialog
+        anchors.centerIn: parent
+        width: 280
+        padding: Theme.spacingL
+        modal: true
+
+        background: Rectangle {
+            color: Theme.surfaceContainerHighest
+            radius: Theme.cornerRadius
+            border.color: Theme.outline
+            border.width: 1
+        }
+
+        Column {
+            width: parent.width
+            spacing: Theme.spacingM
+
+            StyledText {
+                text: "Clear conversation?"
+                font.pixelSize: Theme.fontSizeLarge
+                font.weight: Font.Medium
+                color: Theme.surfaceText
+            }
+
+            StyledText {
+                text: "This will permanently delete all messages."
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.surfaceTextMedium
+                wrapMode: Text.Wrap
+                width: parent.width
+            }
+
+            Row {
+                spacing: Theme.spacingS
+                anchors.right: parent.right
+
+                DankButton {
+                    text: "Cancel"
+                    onClicked: clearConfirmDialog.close()
+                }
+
+                DankButton {
+                    text: "Clear"
+                    backgroundColor: Theme.error
+                    textColor: Theme.onPrimary
+                    onClicked: {
+                        aiService.clearChat();
+                        clearConfirmDialog.close();
+                    }
                 }
             }
         }

@@ -12,6 +12,7 @@ Item {
     property bool canRegenerate: false
     signal regenerateRequested
     signal variantChangeRequested(string msgId, int newIndex)
+    signal editRequested(string msgId, string newText)
 
     function scrollToBottom() {
         stickToBottom = true;
@@ -92,6 +93,7 @@ Item {
                 variantCount: model.variantCount || 1
                 onRegenerateRequested: root.regenerateRequested()
                 onVariantChangeRequested: newIndex => root.variantChangeRequested(model.id, newIndex)
+                onEditRequested: newText => root.editRequested(model.id, newText)
             }
         }
     }

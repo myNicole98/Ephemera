@@ -163,7 +163,9 @@ function markdownToHtml(text, colors) {
     });
 
     // Auto-link plain URLs — http/https only (no file: scheme)
-    html = html.replace(/(^|[^"'>])(https?:\/\/[^\s<]+)/g, '$1<a href="$2">$2</a>');
+    html = html.replace(/(^|[^"'>])(https?:\/\/[^\s<]+)/g, function(match, pre, url) {
+        return pre + '<a href="' + escapeHtml(url) + '">' + escapeHtml(url) + '</a>';
+    });
 
     // Restore code blocks and inline code
     html = html.replace(/\x00CODEBLOCK(\d+)\x00/g, function(match, index) {

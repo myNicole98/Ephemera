@@ -139,13 +139,42 @@ Item {
                                             color: Theme.surfaceVariantText
                                         }
                                         DankTextField {
+                                            id: ollamaUrlField
                                             width: parent.width
                                             text: aiService.ollamaUrl
                                             placeholderText: "http://localhost:11434"
                                             onEditingFinished: {
-                                                aiService.ollamaUrl = text.trim();
-                                                aiService.saveSettingValue("ollamaUrl", text.trim());
+                                                var url = text.trim();
+                                                if (!url) {
+                                                    ollamaUrlError.text = "";
+                                                    return;
+                                                }
+                                                if (url.length > 2048) {
+                                                    ollamaUrlError.text = "URL is too long (max 2048 characters).";
+                                                    return;
+                                                }
+                                                if (!/^https?:\/\//i.test(url)) {
+                                                    ollamaUrlError.text = "Must start with http:// or https://";
+                                                    return;
+                                                }
+                                                if (!/^https?:\/\/[a-zA-Z0-9\-_.:]/.test(url)) {
+                                                    ollamaUrlError.text = "Invalid hostname in URL.";
+                                                    return;
+                                                }
+                                                ollamaUrlError.text = "";
+                                                aiService.ollamaUrl = url;
+                                                aiService.saveSettingValue("ollamaUrl", url);
                                             }
+                                        }
+
+                                        StyledText {
+                                            id: ollamaUrlError
+                                            width: parent.width
+                                            text: ""
+                                            visible: text.length > 0
+                                            font.pixelSize: Theme.fontSizeSmall
+                                            color: Theme.error
+                                            wrapMode: Text.Wrap
                                         }
                                     }
                                 }
@@ -484,13 +513,40 @@ Item {
                                         }
                                     }
                                 }
-                                DankTextField {
+                                Rectangle {
                                     width: parent.width
-                                    text: aiService.systemPrompt
-                                    placeholderText: "You are a helpful assistant."
-                                    onEditingFinished: {
-                                        aiService.systemPrompt = text;
-                                        aiService.saveSettingValue("systemPrompt", text);
+                                    height: Math.max(80, Math.min(160, systemPromptArea.contentHeight + Theme.spacingM * 2))
+                                    radius: Theme.cornerRadius
+                                    color: Theme.surfaceContainerHigh
+                                    border.color: systemPromptArea.activeFocus ? Theme.primary : Theme.outlineMedium
+                                    border.width: systemPromptArea.activeFocus ? 2 : 1
+
+                                    Behavior on height {
+                                        NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
+                                    }
+
+                                    ScrollView {
+                                        anchors.fill: parent
+                                        anchors.margins: Theme.spacingS
+                                        clip: true
+                                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+                                        TextArea {
+                                            id: systemPromptArea
+                                            text: aiService.systemPrompt
+                                            placeholderText: "You are a helpful assistant."
+                                            wrapMode: TextArea.Wrap
+                                            font.pixelSize: Theme.fontSizeMedium
+                                            font.family: Theme.fontFamily
+                                            color: Theme.surfaceText
+                                            background: null
+                                            padding: 0
+
+                                            onEditingFinished: {
+                                                aiService.systemPrompt = text;
+                                                aiService.saveSettingValue("systemPrompt", text);
+                                            }
+                                        }
                                     }
                                 }
 

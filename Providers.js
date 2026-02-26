@@ -179,3 +179,48 @@ function geminiRequest(payload, apiKey) {
 function customRequest(payload, apiKey) {
     return openaiRequest(payload, apiKey);
 }
+
+// ─── Provider Registry ──────────────────────────────────────────
+// Centralized metadata for each provider. Adding a new provider only requires
+// adding one entry here and a buildRequest function above.
+
+var registry = {
+    "ollama": {
+        name: "Ollama",
+        envVar: null,
+        defaultUrl: "http://localhost:11434",
+        needsKey: false
+    },
+    "openai": {
+        name: "OpenAI",
+        envVar: "OPENAI_API_KEY",
+        defaultUrl: "https://api.openai.com",
+        needsKey: true
+    },
+    "anthropic": {
+        name: "Anthropic",
+        envVar: "ANTHROPIC_API_KEY",
+        defaultUrl: "https://api.anthropic.com",
+        needsKey: true
+    },
+    "gemini": {
+        name: "Gemini",
+        envVar: "GEMINI_API_KEY",
+        defaultUrl: "https://generativelanguage.googleapis.com",
+        needsKey: true
+    },
+    "custom": {
+        name: "custom provider",
+        envVar: "EPHEMERA_API_KEY",
+        defaultUrl: "https://api.openai.com",
+        needsKey: true
+    }
+};
+
+function getProviderInfo(provider) {
+    return registry[provider] || registry["custom"];
+}
+
+function getProviderNames() {
+    return Object.keys(registry);
+}

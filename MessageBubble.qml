@@ -21,6 +21,9 @@ Item {
     property int variantCount: 1
     signal regenerateRequested
     signal variantChangeRequested(int newIndex)
+    signal editRequested(string newText)
+    property bool _editing: false
+    property string _editText: ""
 
     readonly property bool isUser: role === "user"
     readonly property real bubbleMaxWidth: isUser ? Math.max(240, Math.floor(width * 0.82)) : width
@@ -42,7 +45,12 @@ Item {
 
     function _updateRenderedHtml() {
         if (!isUser && root.text !== _lastRenderedText) {
-            renderedHtml = Markdown.markdownToHtml(root.text, themeColors);
+            try {
+                renderedHtml = Markdown.markdownToHtml(root.text, themeColors);
+            } catch (e) {
+                console.warn("Ephemera: markdown render error, falling back to plain text:", e);
+                renderedHtml = root.text;
+            }
             _lastRenderedText = root.text;
         }
     }
@@ -192,11 +200,30 @@ Item {
                     }
                 }
 
+                DankActionButton {
+                    visible: root.isUser && root.status === "ok" && !root._editing
+                    opacity: hoverHandler.hovered ? 1.0 : 0.4
+                    iconName: "edit"
+                    buttonSize: 24
+                    iconSize: 14
+                    backgroundColor: "transparent"
+                    iconColor: Theme.primary
+                    tooltipText: "Edit"
+                    onClicked: {
+                        root._editText = root.text;
+                        root._editing = true;
+                    }
+
+                    Behavior on opacity {
+                        NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
+                    }
+                }
+
                 Item { Layout.fillWidth: !root.isUser }
 
                 Row {
                     visible: !root.isUser && root.variantCount > 1
-                    opacity: hoverHandler.hovered ? 1.0 : 0.0
+                    opacity: hoverHandler.hovered ? 1.0 : 0.4
                     spacing: 2
                     Layout.alignment: Qt.AlignVCenter
 
@@ -237,7 +264,7 @@ Item {
                 DankActionButton {
                     id: copyBtn
                     visible: !root.isUser && root.status === "ok"
-                    opacity: hoverHandler.hovered ? 1.0 : 0.0
+                    opacity: hoverHandler.hovered ? 1.0 : 0.4
                     iconName: _copied ? "check" : "content_copy"
                     buttonSize: 24
                     iconSize: 14
@@ -246,7 +273,7 @@ Item {
                     tooltipText: _copied ? "Copied!" : "Copy"
                     property bool _copied: false
                     onClicked: {
-                        Quickshell.execDetached(["wl-copy", root.text]);
+                        Quickshell.execDetached(["wl-copy", "--", root.text]);
                         _copied = true;
                         copyResetTimer.start();
                     }
@@ -264,7 +291,7 @@ Item {
 
                 DankActionButton {
                     visible: !root.isUser && root.isLastAssistant && root.canRegenerate && root.status !== "streaming"
-                    opacity: hoverHandler.hovered ? 1.0 : 0.0
+                    opacity: hoverHandler.hovered ? 1.0 : 0.4
                     iconName: "refresh"
                     buttonSize: 24
                     iconSize: 14
@@ -408,6 +435,7 @@ Item {
 
             TextArea {
                 id: contentArea
+                visible: !root._editing
                 text: root.useMarkdownRendering ? root.renderedHtml : root.text
                 textFormat: root.useMarkdownRendering ? Text.RichText : Text.PlainText
                 wrapMode: Text.Wrap
@@ -440,6 +468,79 @@ Item {
                         contentArea.text = Qt.binding(function() {
                             return root.useMarkdownRendering ? root.renderedHtml : root.text;
                         });
+                    }
+                }
+            }
+
+            // Inline edit area for user messages
+            Column {
+                visible: root._editing
+                width: parent.width
+                spacing: Theme.spacingS
+
+                Rectangle {
+                    width: parent.width
+                    height: Math.max(60, Math.min(200, editArea.contentHeight + Theme.spacingM * 2))
+                    radius: Theme.cornerRadius * 0.75
+                    color: Theme.surfaceContainerHigh
+                    border.color: editArea.activeFocus ? Theme.primary : Theme.outlineMedium
+                    border.width: editArea.activeFocus ? 2 : 1
+
+                    ScrollView {
+                        anchors.fill: parent
+                        anchors.margins: Theme.spacingS
+                        clip: true
+                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+                        TextArea {
+                            id: editArea
+                            text: root._editText
+                            wrapMode: TextArea.Wrap
+                            font.pixelSize: Theme.fontSizeMedium
+                            font.family: Theme.fontFamily
+                            color: Theme.surfaceText
+                            background: null
+                            padding: 0
+
+                            Component.onCompleted: {
+                                editArea.forceActiveFocus();
+                                editArea.cursorPosition = editArea.text.length;
+                            }
+
+                            Keys.onPressed: event => {
+                                if (event.key === Qt.Key_Escape) {
+                                    root._editing = false;
+                                    event.accepted = true;
+                                } else if (event.key === Qt.Key_Return && !(event.modifiers & Qt.ShiftModifier)) {
+                                    if (editArea.text.trim().length > 0) {
+                                        root.editRequested(editArea.text.trim());
+                                        root._editing = false;
+                                    }
+                                    event.accepted = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Row {
+                    spacing: Theme.spacingS
+                    anchors.right: parent.right
+
+                    DankButton {
+                        text: "Cancel"
+                        onClicked: root._editing = false
+                    }
+
+                    DankButton {
+                        text: "Send"
+                        backgroundColor: Theme.primary
+                        textColor: Theme.onPrimary
+                        enabled: editArea.text.trim().length > 0
+                        onClicked: {
+                            root.editRequested(editArea.text.trim());
+                            root._editing = false;
+                        }
                     }
                 }
             }
