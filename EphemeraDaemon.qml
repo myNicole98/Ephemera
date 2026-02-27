@@ -3,7 +3,8 @@ import Quickshell
 import Quickshell.Io
 import qs.Common
 import qs.Services
-import "."
+import "./src/services"
+import "./src/components"
 
 Item {
     id: root

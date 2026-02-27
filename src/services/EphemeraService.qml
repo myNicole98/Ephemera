@@ -3,9 +3,9 @@ import Quickshell
 import Quickshell.Io
 import qs.Common
 import qs.Services
-import "./Providers.js" as Providers
-import "./StreamParser.js" as StreamParser
-import "./ChatExport.js" as ChatExport
+import "../lib/Providers.js" as Providers
+import "../lib/StreamParser.js" as StreamParser
+import "../lib/ChatExport.js" as ChatExport
 
 Item {
     id: root

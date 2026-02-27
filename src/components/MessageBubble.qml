@@ -4,7 +4,7 @@ import QtQuick.Controls
 import Quickshell
 import qs.Common
 import qs.Widgets
-import "./Markdown.js" as Markdown
+import "../lib/Markdown.js" as Markdown
 
 Item {
     id: root

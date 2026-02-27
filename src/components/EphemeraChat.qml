@@ -164,7 +164,7 @@ Item {
                 tooltipText: "Clear chat"
                 visible: root.slideoutExpanded
                 enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                onClicked: clearConfirmDialog.open()
+                onClicked: aiService.clearChat()
             }
 
             DankActionButton {
@@ -256,7 +256,7 @@ Item {
                             width: parent.width
                             height: 36
                             enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                            onClicked: { clearConfirmDialog.open(); overflowMenu.close(); }
+                            onClicked: { aiService.clearChat(); overflowMenu.close(); }
                             background: Rectangle {
                                 color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : "transparent"
                                 radius: Theme.cornerRadius
@@ -572,7 +572,7 @@ Item {
                                 event.accepted = true;
                             } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_L) {
                                 if (!aiService.isStreaming && (aiService.messageCount || 0) > 0)
-                                    clearConfirmDialog.open();
+                                    aiService.clearChat();
                                 composer.forceActiveFocus();
                                 event.accepted = true;
                             } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_N) {
@@ -697,62 +697,6 @@ Item {
         _toastMessage = message;
         toast.opacity = 1;
         toastTimer.restart();
-    }
-
-    // -- Clear chat confirmation dialog --
-    Popup {
-        id: clearConfirmDialog
-        anchors.centerIn: parent
-        width: 280
-        padding: Theme.spacingL
-        modal: true
-
-        background: Rectangle {
-            color: Theme.surfaceContainerHighest
-            radius: Theme.cornerRadius
-            border.color: Theme.outline
-            border.width: 1
-        }
-
-        Column {
-            width: parent.width
-            spacing: Theme.spacingM
-
-            StyledText {
-                text: "Clear conversation?"
-                font.pixelSize: Theme.fontSizeLarge
-                font.weight: Font.Medium
-                color: Theme.surfaceText
-            }
-
-            StyledText {
-                text: "This will permanently delete all messages."
-                font.pixelSize: Theme.fontSizeSmall
-                color: Theme.surfaceTextMedium
-                wrapMode: Text.Wrap
-                width: parent.width
-            }
-
-            Row {
-                spacing: Theme.spacingS
-                anchors.right: parent.right
-
-                DankButton {
-                    text: "Cancel"
-                    onClicked: clearConfirmDialog.close()
-                }
-
-                DankButton {
-                    text: "Clear"
-                    backgroundColor: Theme.error
-                    textColor: Theme.onPrimary
-                    onClicked: {
-                        aiService.clearChat();
-                        clearConfirmDialog.close();
-                    }
-                }
-            }
-        }
     }
 
     // -- Settings overlay with fade in/out --

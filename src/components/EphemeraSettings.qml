@@ -498,16 +498,17 @@ Item {
                                 }
                                 DankDropdown {
                                     width: parent.width
-                                    options: ["(custom)", "Concise", "Code Expert", "Translator", "Writing Editor"]
-                                    currentValue: "(custom)"
+                                    options: ["None", "Concise", "Code Expert", "Translator", "Writing Editor", "(custom)"]
+                                    currentValue: "None"
                                     onValueChanged: value => {
                                         var presets = {
+                                            "None": "",
                                             "Concise": "Be concise. Answer in as few words as possible while remaining helpful and accurate.",
                                             "Code Expert": "You are an expert programmer. Provide clean, well-structured code with brief explanations. Prefer practical solutions.",
                                             "Translator": "You are a translator. Translate the user's text to the target language they specify. If no language is specified, translate to English.",
                                             "Writing Editor": "You are a writing editor. Improve clarity, grammar, and flow while preserving the author's voice and intent."
                                         };
-                                        if (presets[value]) {
+                                        if (presets.hasOwnProperty(value)) {
                                             aiService.systemPrompt = presets[value];
                                             aiService.saveSettingValue("systemPrompt", presets[value]);
                                         }
