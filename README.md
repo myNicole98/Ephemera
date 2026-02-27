@@ -8,6 +8,8 @@
 
 AI chat for your desktop — ask quick questions, keep nothing (or everything).
 
+![Ephemera screenshot](screenshots/screenshot.jpg)
+
 Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plugin that adds an AI chat slideout panel to your Wayland desktop shell. By default, all conversations live in memory and disappear when you close the panel. Enable **Save Chat History** in settings to persist conversations across sessions.
 
 ## Features
@@ -77,7 +79,6 @@ Open the slideout panel via your shell's configured keybind or action. Type a me
 |---|---|
 | Enter | Send message |
 | Shift+Enter | Insert newline |
-| Ctrl+Enter | Send message |
 | Escape | Close panel |
 | Ctrl+L | Clear chat |
 | Ctrl+N | New conversation (clear chat + composer) |
@@ -134,49 +135,9 @@ If it's set but Ephemera still shows "API key not found", Quickshell may not be 
 
 The default timeout is 300 seconds. For large models or slow hardware, increase it in Settings → Model Parameters → Request Timeout (max 600s).
 
-## Custom Provider Examples
+## Custom Provider
 
-Ephemera's "custom" provider works with any OpenAI-compatible API. Set the base URL in Settings and export `EPHEMERA_API_KEY`.
-
-### LocalAI
-
-```bash
-export EPHEMERA_API_KEY="not-needed"  # LocalAI often doesn't require a key
-```
-
-Base URL: `http://localhost:8080`
-
-### vLLM
-
-```bash
-export EPHEMERA_API_KEY="token-abc123"
-```
-
-Base URL: `http://localhost:8000`
-
-### LM Studio
-
-```bash
-export EPHEMERA_API_KEY="lm-studio"  # LM Studio ignores the key
-```
-
-Base URL: `http://localhost:1234`
-
-### OpenRouter
-
-```bash
-export EPHEMERA_API_KEY="sk-or-..."
-```
-
-Base URL: `https://openrouter.ai/api`
-
-### Groq
-
-```bash
-export EPHEMERA_API_KEY="gsk_..."
-```
-
-Base URL: `https://api.groq.com/openai`
+The "custom" provider works with any OpenAI-compatible API (LocalAI, vLLM, LM Studio, OpenRouter, Groq, etc.). Set the base URL in Settings and export `EPHEMERA_API_KEY`. Ephemera appends `/v1/chat/completions` automatically unless the URL already ends with a versioned path.
 
 ## License
 

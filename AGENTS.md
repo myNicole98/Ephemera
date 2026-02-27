@@ -1,102 +1,49 @@
 # AGENTS.md
 
-> **Before modifying this file**, review the spec at <https://agents.md/> to ensure changes remain compliant.
+## Overview
 
-## Project Overview
+Ephemera is a DankMaterialShell daemon plugin (`"type": "daemon"`) providing an AI chat slideout panel for Wayland. In-memory by default; optional persistence via PluginService.
 
-Ephemera is a Quickshell daemon plugin that provides an AI chat slideout panel for a Linux Wayland desktop shell. By default, all messages are in-memory only — nothing is persisted to disk. An optional "Save Chat History" toggle persists conversations via PluginService (API keys are never stored). It is defined in `plugin.json` as a `"type": "daemon"` plugin with `slideout` and `ai` capabilities.
+## Setup
 
-## Setup & Development Environment
+No standalone build or test system. Symlink into the parent Quickshell config's plugin path and reload the shell. Source lives in `src/`. Hot-reload with `dms ipc call plugins reload ephemera`.
 
-This is a QML plugin loaded by a parent Quickshell configuration. There is no standalone build or test system. To use it, place/symlink this directory into the parent Quickshell config's plugin path and reload the shell.
+Depends on parent config modules: `qs.Common` (Theme, StyledText), `qs.Widgets` (Dank* components), `qs.Services` (PluginService).
 
-The plugin depends on shared QML modules from the parent config:
-- `qs.Common` — Theme, StyledText
-- `qs.Widgets` — DankButton, DankDropdown, DankTextField, DankSlider, DankActionButton, DankIcon, DankFlickable
-- `qs.Services` — PluginService (settings persistence)
+## Gotchas & Landmines
 
-Environment variables required for non-Ollama providers:
-- `OPENAI_API_KEY` — OpenAI
-- `ANTHROPIC_API_KEY` — Anthropic
-- `GEMINI_API_KEY` — Gemini
-- `EPHEMERA_API_KEY` — Custom (OpenAI-compatible)
+- **Qt textFormat binding bug** — switching `textFormat` between `RichText`/`PlainText` destroys the `text` binding. Must re-establish via `Qt.binding()` in a `Connections` handler. See `MessageBubble.qml`.
+- **Provider switch clears chat** — changing providers clears history and index maps to prevent stale `messageIndexMap` lookups. Model changes within the same provider preserve conversation.
+- **ListModel limitations** — QML `ListModel` can't store nested arrays or complex objects. Use JS side-channel maps (`variantStore`, `messageIndexMap`) alongside the model.
+- **Ollama safety net** — `Component.onDestruction` fires `pkill` as last resort. The `_shuttingDown` flag prevents double-shutdown. External Ollama is never auto-stopped by the idle timer.
+- **5MB stdout buffer cap** — exceeding it kills the curl process to prevent memory exhaustion from runaway responses.
+- **DMS permissions are silent** — missing permission declarations in `plugin.json` prevent PluginService calls without logging errors. Current permissions: `settings_read`, `settings_write`.
+- **pluginData null during init** — use `??` operator for `pluginData` access; values are `undefined` before first load.
+- **DMS auto-injected properties** — `pluginData`, `pluginService`, `pluginId` are injected into the root component without declaration. Don't redeclare them.
 
-## Code Style
+## Conventions (non-obvious)
 
-- **Language:** QML (Qt6/Quickshell) for UI and service logic; JavaScript (`.js`) for pure-function libraries
-- **Naming:** PascalCase for QML component files and type names, camelCase for properties/functions/signals, `_prefixed` for private properties
-- **Component IDs:** Root items use `id: root`; delegate roots use `id: delegate`
-- **Properties:** Group with comment headers (e.g., `// --- Provider settings ---`); use `readonly property` for derived values
-- **Signals:** Prefer signal declarations on components, connect via `Connections` or inline handlers
-- **JS libraries:** `Providers.js` and `Markdown.js` are imported with namespace aliases (`as Providers`, etc.) — keep them as pure-function libraries with no QML dependencies
-- **State management:** All mutable state lives in `EphemeraService.qml`; UI components read via property bindings and write via function calls on the service
-- **ListModel usage:** Use JS side-channel maps (`variantStore`, `messageIndexMap`) for data that QML ListModel can't represent (nested arrays, O(1) lookups)
+- **Root IDs** — root items: `id: root`, delegate roots: `id: delegate`.
+- **Private properties** — prefix with `_` (e.g., `_streamContent`, `_shuttingDown`).
+- **JS libraries** — `Providers.js` and `Markdown.js` are pure-function, no QML imports. Import with namespace aliases (`as Providers`).
+- **State centralization** — all mutable state in `EphemeraService.qml`. UI reads via bindings, writes via function calls.
+- **Property grouping** — use `// --- Section name ---` comment headers.
+- **Theme** — never hardcode colors/spacing/fonts. Use `Theme` singleton from `qs.Common`.
 
-## Architecture
+## Architecture Decisions
 
-### File Map
+- **curl via Process, not native HTTP** — requests pipe body via stdin (`-d @-`) so secrets never appear in `/proc/cmdline`.
+- **Deferred markdown** — `markdownToHtml()` runs only after streaming completes, never per-delta. `_lastRenderedText` cache prevents redundant re-renders.
+- **Variants, not replacements** — regeneration saves current response into `variantStore[msgId]` and streams a new one. Capped at 10 (FIFO eviction).
+- **Stream isolation** — `_streamContent`/`_streamThinking` buffers are independent of the displayed variant. `_streamVariantIndex` tracks the write target.
+- **Cancel preserves content** — partial responses become navigable variants, not discarded.
+- **Three thinking paths** — (1) `<think>` tags in content stream (Ollama models), (2) `reasoning_content` fields (DeepSeek API), (3) Anthropic extended thinking API with interleaved-thinking header.
+- **PluginService: settings vs state** — settings (`savePluginData`) for user preferences shown in UI; state (`savePluginState`) for runtime data like chat history. State writes are debounced (150ms) and atomic. State requires no permissions.
 
-| File | Role |
-|------|------|
-| `plugin.json` | Plugin manifest — type, capabilities, entry component |
-| `EphemeraDaemon.qml` | Entry point — creates `EphemeraService` singleton + per-screen `EphemeraPanel` |
-| `EphemeraPanel.qml` | Wayland layer-shell `PanelWindow` — slide animation, expand/collapse, focus management |
-| `EphemeraService.qml` | Service layer — all state, API calls, Ollama lifecycle, streaming, variants |
-| `EphemeraChat.qml` | Main chat view — header, message area, composer, settings overlay |
-| `EphemeraSettings.qml` | Settings panel — provider, model, temperature, tokens, system prompt, Ollama controls |
-| `MessageList.qml` | `ListView` wrapper — auto-scroll, entry animations, variant signal forwarding |
-| `MessageBubble.qml` | Message rendering — markdown, thinking sections, variants, copy, regenerate |
-| `Providers.js` | Provider abstraction — builds curl commands/JSON for Ollama, OpenAI, Anthropic, Gemini, custom |
-| `Markdown.js` | Markdown-to-HTML — Qt-compatible rich text with security hardening |
+## Security Invariants
 
-### Data Flow
-
-1. User types in `EphemeraChat` composer, triggers `sendMessage()` on `EphemeraService`
-2. `EphemeraService.buildPayload()` collects the last N user turns (sliding context window) and calls `Providers.buildCurlCommand()` to construct the provider-specific request
-3. API calls spawn `curl` via Quickshell's `Process` type with the request body piped through stdin (`-d @-`) so secrets never appear in `/proc/cmdline`
-4. SSE stream chunks arrive via `handleStreamChunk` → `parseProviderDelta` → `routeContentDelta` (for `<think>` tag detection)
-5. On stream completion, `MessageBubble` runs deferred `markdownToHtml()` rendering
-
-### Panel Behavior
-
-`EphemeraPanel.qml` — slide animation (400ms OutCubic), expand/collapse between 480px and 960px widths, keyboard focus (`OnDemand` when visible, `None` when hidden), DPR-aware rendering, mask-based input region. Fires `opened()` after slide-in, which triggers `focusInput()` on `EphemeraChat`.
-
-### Ollama Lifecycle
-
-On startup, pings Ollama; if unreachable, starts `ollama serve` with up to 15 retries (1s interval). Uses `ollamaStartPending` flag to avoid premature `ollamaWeStarted`. Re-pings on panel visibility via `ensureOllamaReady()`. Tracks external vs. plugin-started Ollama. Configurable idle timer (`ollamaIdleMinutes`, default 5 min, 0 = never) auto-stops if we started it; external Ollama is never auto-stopped. `shutdownOllama()` and `forceShutdownExternalOllama()` use `_shuttingDown` flag + `pkill` safety net. Unexpected death resets flags for auto-restart. `Component.onDestruction` fires `pkill` as safety net. Auto-discovers models via `/api/tags`.
-
-## Security Considerations
-
-- **API keys from env vars only** — never stored on disk, never persisted by PluginService. `EphemeraSettings` displays detection status but provides no input fields.
-- **Secrets hidden from procfs** — curl requests use `-d @-` (stdin) so API keys and request bodies never appear in `/proc/cmdline`.
-- **Stdout buffer cap** — 5MB limit (checked before processing) prevents memory exhaustion from malicious/runaway responses; exceeding it kills the curl process.
-- **Markdown security** — HTML is escaped before rendering; link schemes are whitelisted to `http`/`https` only.
-- **Custom URL validation** — must start with `http://` or `https://`, have a valid hostname, and be under 2048 characters. Errors shown inline.
-- **Chat persistence is opt-in** — disabled by default; when enabled, saves messages/variants via PluginService but never API keys.
-
-## Key Design Decisions
-
-### Streaming & Parsing
-- **SSE streaming for all providers** — `handleStreamChunk` parses `data:` lines incrementally; `parseProviderDelta` dispatches by provider. Falls back to `extractNonStreamingAssistantText()` if no streamed content was received.
-- **Thinking/reasoning content** — Three paths: (1) `<think>...</think>` tags in content stream (Qwen3, DeepSeek via Ollama) detected by `routeContentDelta`. (2) Explicit `reasoning_content`/`reasoning` fields (DeepSeek via OpenAI-compatible APIs) handled in `parseProviderDelta`. (3) Anthropic extended thinking via `thinkingEnabled` toggle — adds `anthropic-beta: interleaved-thinking-2025-05-14` header, 80% of `maxTokens` thinking budget (min 1024), forces temperature to 1.0.
-
-### Variant System
-- **Regeneration creates variants, not replacements** — current `{content, thinking, modelName}` saved into `variantStore[msgId]`, variant count incremented, message reset for streaming. Navigate with `< 1/2 >` arrows. Each variant records its model. Capped at 10; overflow evicts oldest (FIFO).
-- **Stream isolation** — `_streamContent`/`_streamThinking` buffers are independent of displayed message. `_streamVariantIndex` tracks which slot the stream writes to, regardless of which variant the user views.
-- **Cancel preserves content** — `cancel()` flushes partial `<think>` buffer, saves partial content as a navigable variant, sets status to `"ok"`.
-
-### Rendering
-- **Deferred markdown** — `markdownToHtml()` runs only when streaming finishes, not on every delta. `_lastRenderedText` cache avoids redundant re-renders.
-- **TextArea textFormat workaround** — Qt breaks `text` binding when `textFormat` switches between `RichText` and `PlainText`. Worked around by re-establishing the binding via `Qt.binding()` in a `Connections` handler.
-
-### State Management
-- **Message index map** — `findIndexById()` uses `messageIndexMap` for O(1) lookups, updated on append, cleared on `clearChat()`.
-- **Provider switch cleanup** — changing providers clears chat history and index maps to prevent stale lookups. Model changes within the same provider preserve the conversation.
-- **Sliding context window** — `buildPayload` collects the last N user turns (configurable `maxTurns`, up to 100).
-
-### UI Details
-- **Copy uses `wl-copy`** — Wayland-only clipboard. Checkmark feedback for 1.5s.
-- **HTTP error hints** — `httpErrorHint()` provides contextual suggestions for common HTTP status codes (401 → check API key, 429 → rate limited, etc.).
-- **Missing API key banner** — prominent banner showing which env var to set, in addition to the subtle red pill tint.
-- **Header overflow menu** — copy/save/clear collapse into three-dots menu when not expanded; settings/expand/close always visible.
-- **File export** — `exportConversationToFile()` writes markdown to `~/ephemera-chat-<timestamp>.md` via a `tee` process with stdin.
+- API keys: env vars only, never persisted by PluginService.
+- curl stdin for request bodies (not `/proc/cmdline`-visible args).
+- HTML escaped before markdown rendering; link schemes whitelisted to http/https.
+- Custom URLs validated: http(s) only, valid hostname, max 2048 chars.
+- Chat persistence opt-in; API keys never stored regardless.
