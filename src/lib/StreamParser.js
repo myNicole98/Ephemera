@@ -41,11 +41,14 @@ function parseDelta(jsonText, provider) {
         } else if (provider === "gemini") {
             var chunks = Array.isArray(data) ? data : [data];
             for (var ci = 0; ci < chunks.length; ci++) {
+                if (!chunks[ci]) continue;
                 var candidates = chunks[ci].candidates;
-                if (!candidates || !candidates[0] || !candidates[0].content) continue;
-                var cparts = candidates[0].content.parts || [];
+                if (!Array.isArray(candidates) || !candidates[0]) continue;
+                var content = candidates[0].content;
+                if (!content || !Array.isArray(content.parts)) continue;
+                var cparts = content.parts;
                 for (var pi = 0; pi < cparts.length; pi++) {
-                    if (cparts[pi].text)
+                    if (cparts[pi] && cparts[pi].text)
                         result.content += cparts[pi].text;
                 }
             }
@@ -61,7 +64,7 @@ function parseDelta(jsonText, provider) {
                 result.done = true;
         }
     } catch (e) {
-        // Malformed chunk — ignore
+        console.warn("Ephemera: StreamParser.parseDelta parse error for", provider + ":", e);
     }
     return result;
 }
@@ -141,11 +144,14 @@ function extractNonStreamingText(bodyText, provider) {
             var gchunks = Array.isArray(data) ? data : [data];
             var gout = "";
             for (var gi = 0; gi < gchunks.length; gi++) {
+                if (!gchunks[gi]) continue;
                 var cands = gchunks[gi].candidates;
-                if (!cands || !cands[0] || !cands[0].content) continue;
-                var gparts = cands[0].content.parts || [];
+                if (!Array.isArray(cands) || !cands[0]) continue;
+                var gcontent = cands[0].content;
+                if (!gcontent || !Array.isArray(gcontent.parts)) continue;
+                var gparts = gcontent.parts;
                 for (var gpi = 0; gpi < gparts.length; gpi++) {
-                    if (gparts[gpi].text) gout += gparts[gpi].text;
+                    if (gparts[gpi] && gparts[gpi].text) gout += gparts[gpi].text;
                 }
             }
             return gout;
@@ -159,7 +165,7 @@ function extractNonStreamingText(bodyText, provider) {
                 return choices[0].text;
         }
     } catch (e) {
-        // Parse error — return empty
+        console.warn("Ephemera: StreamParser.extractNonStreamingText parse error for", provider + ":", e);
     }
     return "";
 }

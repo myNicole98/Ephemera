@@ -9,7 +9,15 @@
 function normalizeBaseUrl(url) {
     var u = (url || "").trim();
     if (!u) return "";
+    if (!/^https?:\/\//i.test(u)) return "";
+    if (u.length > 2048) return "";
     return u.endsWith("/") ? u.slice(0, -1) : u;
+}
+
+// Sanitize API key: strip newlines and control characters to prevent header injection.
+function sanitizeApiKey(key) {
+    if (!key) return "";
+    return key.replace(/[\r\n\x00-\x1f]/g, "").trim();
 }
 
 // Shared helper: separates system messages from conversation messages.
@@ -81,35 +89,41 @@ function ollamaRequest(payload) {
     // Use OpenAI-compatible endpoint for SSE streaming
     var base = normalizeBaseUrl(payload.baseUrl || "http://localhost:11434");
     var url = base + "/v1/chat/completions";
+    var temp = clampTemperature("ollama", payload.model, payload.temperature);
     var body = {
         model: payload.model,
         messages: payload.messages,
         max_tokens: payload.max_tokens || 4096,
-        temperature: payload.temperature || 0.7,
         stream: true
     };
+    if (temp !== undefined) body.temperature = temp;
     // No auth header for Ollama
     return { url: url, headers: [], body: JSON.stringify(body) };
 }
 
 function openaiRequest(payload, apiKey) {
     var url = openaiChatCompletionsUrl(payload.baseUrl || "https://api.openai.com");
-    var headers = ["-H", "Authorization: Bearer " + apiKey];
+    var safeKey = sanitizeApiKey(apiKey);
+    if (!safeKey) return null;
+    var headers = ["-H", "Authorization: Bearer " + safeKey];
+    var temp = clampTemperature("openai", payload.model, payload.temperature);
     var body = {
         model: payload.model,
         messages: payload.messages,
         max_tokens: payload.max_tokens || 4096,
-        temperature: payload.temperature || 0.7,
         stream: true
     };
+    if (temp !== undefined) body.temperature = temp;
     return { url: url, headers: headers, body: JSON.stringify(body) };
 }
 
 function anthropicRequest(payload, apiKey) {
     var base = normalizeBaseUrl(payload.baseUrl || "https://api.anthropic.com");
     var url = base + "/v1/messages";
+    var safeKey = sanitizeApiKey(apiKey);
+    if (!safeKey) return null;
     var headers = [
-        "-H", "x-api-key: " + apiKey,
+        "-H", "x-api-key: " + safeKey,
         "-H", "anthropic-version: 2023-06-01"
     ];
 
@@ -128,13 +142,15 @@ function anthropicRequest(payload, apiKey) {
     }
 
     var maxTokens = payload.max_tokens || 4096;
+    // Anthropic requires temperature=1 when extended thinking is enabled
+    var temp = payload.thinkingEnabled ? 1 : clampTemperature("anthropic", payload.model, payload.temperature);
     var body = {
         model: payload.model,
         messages: filteredMessages,
         max_tokens: maxTokens,
-        temperature: payload.thinkingEnabled ? 1 : (payload.temperature || 0.7),
         stream: true
     };
+    if (temp !== undefined) body.temperature = temp;
 
     if (payload.thinkingEnabled)
         body.thinking = { type: "enabled", budget_tokens: Math.max(1024, Math.floor(maxTokens * 0.8)) };
@@ -150,7 +166,9 @@ function geminiRequest(payload, apiKey) {
     // Key as header, NOT in URL — security fix
     var url = base + "/v1beta/models/" + (payload.model || "gemini-2.5-flash")
         + ":streamGenerateContent?alt=sse";
-    var headers = ["-H", "x-goog-api-key: " + apiKey];
+    var safeKey = sanitizeApiKey(apiKey);
+    if (!safeKey) return null;
+    var headers = ["-H", "x-goog-api-key: " + safeKey];
 
     // Extract system prompt
     var extracted = extractSystemPrompt(payload.messages);
@@ -163,12 +181,12 @@ function geminiRequest(payload, apiKey) {
         });
     }
 
+    var temp = clampTemperature("gemini", payload.model, payload.temperature);
+    var genConfig = { maxOutputTokens: payload.max_tokens || 4096 };
+    if (temp !== undefined) genConfig.temperature = temp;
     var body = {
         contents: contents,
-        generationConfig: {
-            temperature: payload.temperature || 0.7,
-            maxOutputTokens: payload.max_tokens || 4096
-        }
+        generationConfig: genConfig
     };
     if (extracted.systemText)
         body.system_instruction = { parts: [{ text: extracted.systemText }] };
@@ -189,31 +207,38 @@ var registry = {
         name: "Ollama",
         envVar: null,
         defaultUrl: "http://localhost:11434",
-        needsKey: false
+        needsKey: false,
+        tempMin: 0.0, tempMax: 2.0, tempDefault: 0.8
     },
     "openai": {
         name: "OpenAI",
         envVar: "OPENAI_API_KEY",
         defaultUrl: "https://api.openai.com",
-        needsKey: true
+        needsKey: true,
+        tempMin: 0.0, tempMax: 2.0, tempDefault: 1.0,
+        // o1/o3 reasoning models don't support temperature
+        tempUnsupportedModels: ["o1", "o3"]
     },
     "anthropic": {
         name: "Anthropic",
         envVar: "ANTHROPIC_API_KEY",
         defaultUrl: "https://api.anthropic.com",
-        needsKey: true
+        needsKey: true,
+        tempMin: 0.0, tempMax: 1.0, tempDefault: 1.0
     },
     "gemini": {
         name: "Gemini",
         envVar: "GEMINI_API_KEY",
         defaultUrl: "https://generativelanguage.googleapis.com",
-        needsKey: true
+        needsKey: true,
+        tempMin: 0.0, tempMax: 2.0, tempDefault: 1.0
     },
     "custom": {
         name: "custom provider",
         envVar: "EPHEMERA_API_KEY",
         defaultUrl: "https://api.openai.com",
-        needsKey: true
+        needsKey: true,
+        tempMin: 0.0, tempMax: 2.0, tempDefault: 0.7
     }
 };
 
@@ -223,4 +248,25 @@ function getProviderInfo(provider) {
 
 function getProviderNames() {
     return Object.keys(registry);
+}
+
+// Clamp temperature to the provider's valid range.
+// Returns undefined if the model doesn't support temperature (e.g. OpenAI o1/o3).
+function clampTemperature(provider, model, temperature) {
+    var info = registry[provider] || registry["custom"];
+    // Check if model doesn't support temperature
+    if (info.tempUnsupportedModels) {
+        var m = (model || "").toLowerCase();
+        for (var i = 0; i < info.tempUnsupportedModels.length; i++) {
+            if (m.indexOf(info.tempUnsupportedModels[i]) === 0)
+                return undefined;
+        }
+    }
+    var t = (temperature !== undefined && temperature !== null) ? temperature : info.tempDefault;
+    return Math.max(info.tempMin, Math.min(info.tempMax, t));
+}
+
+function getTemperatureRange(provider) {
+    var info = registry[provider] || registry["custom"];
+    return { min: info.tempMin, max: info.tempMax, defaultValue: info.tempDefault };
 }

@@ -15,6 +15,16 @@ Item {
 
     visible: isVisible
 
+    // Validate pending text fields on close so edits aren't lost
+    onCloseRequested: {
+        if (aiService.provider === "custom" && customUrlField.text.trim()) {
+            customUrlField.editingFinished();
+        }
+        if (aiService.provider === "ollama" && ollamaUrlField.text.trim()) {
+            ollamaUrlField.editingFinished();
+        }
+    }
+
     readonly property bool hasOpenaiKey: (Quickshell.env("OPENAI_API_KEY") || "").length > 0
     readonly property bool hasAnthropicKey: (Quickshell.env("ANTHROPIC_API_KEY") || "").length > 0
     readonly property bool hasGeminiKey: (Quickshell.env("GEMINI_API_KEY") || "").length > 0
@@ -577,7 +587,12 @@ Item {
                                         }
 
                                         StyledText {
-                                            text: "Controls randomness (0 = focused, 2 = creative)"
+                                            text: {
+                                                var maxT = aiService.tempMax;
+                                                if (maxT <= 1.0)
+                                                    return "Controls randomness (0 = focused, " + maxT.toFixed(1) + " = creative). Capped for " + aiService.provider + ".";
+                                                return "Controls randomness (0 = focused, " + maxT.toFixed(1) + " = creative)";
+                                            }
                                             font.pixelSize: Theme.fontSizeSmall
                                             color: Theme.surfaceVariantText
                                             wrapMode: Text.WordWrap
@@ -589,13 +604,14 @@ Item {
                                 DankSlider {
                                     width: parent.width
                                     height: 32
-                                    minimum: 0
-                                    maximum: 20
-                                    value: Math.round(aiService.temperature * 10)
+                                    minimum: Math.round(aiService.tempMin * 10)
+                                    maximum: Math.round(aiService.tempMax * 10)
+                                    value: Math.round(Math.min(aiService.temperature, aiService.tempMax) * 10)
                                     showValue: false
                                     onSliderValueChanged: newValue => {
-                                        aiService.temperature = newValue / 10;
-                                        aiService.saveSettingValue("temperature", newValue / 10);
+                                        var clamped = Math.max(aiService.tempMin, Math.min(aiService.tempMax, newValue / 10));
+                                        aiService.temperature = clamped;
+                                        aiService.saveSettingValue("temperature", clamped);
                                     }
                                 }
 

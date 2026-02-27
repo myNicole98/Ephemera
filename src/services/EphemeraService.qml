@@ -47,6 +47,11 @@ Item {
     property alias discoveryError: ollamaManager.discoveryError
     property alias ollamaIdleMinutes: ollamaManager.ollamaIdleMinutes
 
+    // Per-provider temperature range
+    readonly property var temperatureRange: Providers.getTemperatureRange(provider)
+    readonly property real tempMax: temperatureRange.max
+    readonly property real tempMin: temperatureRange.min
+
     readonly property bool isOllama: provider === "ollama"
     readonly property bool needsApiKey: provider !== "ollama"
     readonly property bool hasApiKey: resolveApiKey().length > 0
@@ -59,7 +64,8 @@ Item {
     }
 
     Component.onDestruction: {
-        saveChatHistory();
+        try { saveChatHistory(); }
+        catch (e) { console.warn("Ephemera: error saving chat on destruction:", e); }
         ollamaManager.cleanupOnDestruction();
     }
 
@@ -71,7 +77,7 @@ Item {
         isStreaming: root.isStreaming
 
         onModelAutoSelected: name => {
-            if (!root.model) {
+            if (!root.model || root.model.length === 0) {
                 root.model = name;
                 root.saveSettingValue("model", name);
             }
@@ -104,6 +110,16 @@ Item {
         if (oldProvider && oldProvider !== provider)
             clearChat();
 
+        // Clamp temperature to the new provider's valid range
+        var range = Providers.getTemperatureRange(provider);
+        if (temperature > range.max) {
+            temperature = range.max;
+            saveSettingValue("temperature", temperature);
+        } else if (temperature < range.min) {
+            temperature = range.min;
+            saveSettingValue("temperature", temperature);
+        }
+
         updateBaseUrl();
     }
 
@@ -118,19 +134,23 @@ Item {
         }
     }
 
-    property bool _savingSettings: false
-
     function saveSettingValue(key, value) {
-        _savingSettings = true;
+        _settingsReloadDebounce.restart();
         PluginService.savePluginData(pluginId, key, value);
-        _savingSettings = false;
+    }
+
+    // Debounce external settings changes to avoid reloading mid-save
+    Timer {
+        id: _settingsReloadDebounce
+        interval: 150
+        repeat: false
     }
 
     Connections {
         target: PluginService
         function onPluginDataChanged(pId) {
             if (pId !== root.pluginId) return;
-            if (root._savingSettings) return;
+            if (_settingsReloadDebounce.running) return;
             loadSettings();
         }
     }
@@ -214,8 +234,9 @@ Item {
 
     function sendMessage(text) {
         if (!text || text.trim().length === 0) return;
-        if (isStreaming && chatFetcher.running) {
-            markError(activeStreamId, "Please wait until the current response finishes.");
+        if (isStreaming || chatFetcher.running) {
+            if (activeStreamId)
+                markError(activeStreamId, "Please wait until the current response finishes.");
             return;
         }
         ollamaManager.stopIdleTimer();
@@ -267,12 +288,16 @@ Item {
             evicted++;
         }
         if (evicted > 0) {
-            _streamVariantIndex = Math.max(0, _streamVariantIndex - evicted);
+            var newCount = store[msgId].length;
+            _streamVariantIndex = Math.max(0, Math.min(_streamVariantIndex - evicted, newCount - 1));
             var idx = findIndexById(msgId);
             if (idx >= 0) {
                 var msg = messagesModel.get(idx);
-                messagesModel.setProperty(idx, "variantIndex", Math.max(0, msg.variantIndex - evicted));
-                messagesModel.setProperty(idx, "variantCount", store[msgId].length);
+                if (msg) {
+                    var newVariantIndex = Math.max(0, Math.min(msg.variantIndex - evicted, newCount - 1));
+                    messagesModel.setProperty(idx, "variantIndex", newVariantIndex);
+                    messagesModel.setProperty(idx, "variantCount", newCount);
+                }
             }
         }
         variantStore = store;
@@ -434,6 +459,8 @@ Item {
     }
 
     function _launchCurl() {
+        if (chatFetcher.running) return;
+
         var payload = buildPayload(lastUserText);
         var result = buildCurlCommand(payload);
         if (!result) {

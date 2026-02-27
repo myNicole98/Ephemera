@@ -71,7 +71,8 @@ Item {
     }
 
     function cleanupOnDestruction() {
-        if (ollamaWeStarted) {
+        if (ollamaWeStarted && !_shuttingDown) {
+            _shuttingDown = true;
             ollamaProcess.running = false;
             _kill();
         }

@@ -56,9 +56,22 @@ function markdownToHtml(text, colors) {
 
     // Extract tables BEFORE HTML entity escaping — with escaped cell content
     html = html.replace(/^\|(.+)\|\s*\n\|[\s\-:|]+\|\s*\n((?:\|.+\|\s*\n?)+)/gm, function(match, headerRow, dataRows) {
-        var headers = headerRow.split('|').map(function(h) { return h.trim(); }).filter(function(h) { return h; });
+        // Split by | but keep empty cells to preserve column alignment
+        var rawHeaders = headerRow.split('|').map(function(h) { return h.trim(); });
+        // Remove leading/trailing empty strings from the split (outer pipes)
+        if (rawHeaders.length > 0 && rawHeaders[0] === '') rawHeaders.shift();
+        if (rawHeaders.length > 0 && rawHeaders[rawHeaders.length - 1] === '') rawHeaders.pop();
+        var headers = rawHeaders;
+        var numCols = headers.length;
+
         var rows = dataRows.trim().split('\n').map(function(row) {
-            return row.split('|').map(function(cell) { return cell.trim(); }).filter(function(cell) { return cell !== ''; });
+            var cells = row.split('|').map(function(cell) { return cell.trim(); });
+            if (cells.length > 0 && cells[0] === '') cells.shift();
+            if (cells.length > 0 && cells[cells.length - 1] === '') cells.pop();
+            // Pad or trim to match header column count
+            while (cells.length < numCols) cells.push("");
+            if (cells.length > numCols) cells = cells.slice(0, numCols);
+            return cells;
         });
 
         var tableHtml = '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; margin: 8px 0;">';
@@ -71,7 +84,7 @@ function markdownToHtml(text, colors) {
 
         for (var r = 0; r < rows.length; r++) {
             tableHtml += '<tr>';
-            for (var cl = 0; cl < rows[r].length; cl++) {
+            for (var cl = 0; cl < numCols; cl++) {
                 tableHtml += '<td style="padding: 5px;">' + escapeHtml(rows[r][cl]) + '</td>';
             }
             tableHtml += '</tr>';
@@ -167,13 +180,15 @@ function markdownToHtml(text, colors) {
         return pre + '<a href="' + escapeHtml(url) + '">' + escapeHtml(url) + '</a>';
     });
 
-    // Restore code blocks and inline code
+    // Restore code blocks and inline code (with bounds checking)
     html = html.replace(/\x00CODEBLOCK(\d+)\x00/g, function(match, index) {
-        return codeBlocks[parseInt(index)];
+        var idx = parseInt(index);
+        return idx < codeBlocks.length ? codeBlocks[idx] : match;
     });
 
     html = html.replace(/\x00INLINECODE(\d+)\x00/g, function(match, index) {
-        return inlineCode[parseInt(index)];
+        var idx = parseInt(index);
+        return idx < inlineCode.length ? inlineCode[idx] : match;
     });
 
     // Line breaks
@@ -184,9 +199,10 @@ function markdownToHtml(text, colors) {
         html = '<p>' + html + '</p>';
     }
 
-    // Restore protected blocks
+    // Restore protected blocks (with bounds checking)
     html = html.replace(/\x00PROTECTEDBLOCK(\d+)\x00/g, function(match, index) {
-        return protectedBlocks[parseInt(index)];
+        var idx = parseInt(index);
+        return idx < protectedBlocks.length ? protectedBlocks[idx] : match;
     });
 
     // Cleanup
