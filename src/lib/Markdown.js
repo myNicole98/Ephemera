@@ -180,17 +180,6 @@ function markdownToHtml(text, colors) {
         return pre + '<a href="' + escapeHtml(url) + '">' + escapeHtml(url) + '</a>';
     });
 
-    // Restore code blocks and inline code (with bounds checking)
-    html = html.replace(/\x00CODEBLOCK(\d+)\x00/g, function(match, index) {
-        var idx = parseInt(index);
-        return idx < codeBlocks.length ? codeBlocks[idx] : match;
-    });
-
-    html = html.replace(/\x00INLINECODE(\d+)\x00/g, function(match, index) {
-        var idx = parseInt(index);
-        return idx < inlineCode.length ? inlineCode[idx] : match;
-    });
-
     // Line breaks
     html = html.replace(/\n\n/g, '</p><p>');
     html = html.replace(/\n/g, '<br/>');
@@ -203,6 +192,18 @@ function markdownToHtml(text, colors) {
     html = html.replace(/\x00PROTECTEDBLOCK(\d+)\x00/g, function(match, index) {
         var idx = parseInt(index);
         return idx < protectedBlocks.length ? protectedBlocks[idx] : match;
+    });
+
+    // Restore code blocks and inline code AFTER protected blocks,
+    // so placeholders captured inside lists/blockquotes/tables are reached
+    html = html.replace(/\x00CODEBLOCK(\d+)\x00/g, function(match, index) {
+        var idx = parseInt(index);
+        return idx < codeBlocks.length ? codeBlocks[idx] : match;
+    });
+
+    html = html.replace(/\x00INLINECODE(\d+)\x00/g, function(match, index) {
+        var idx = parseInt(index);
+        return idx < inlineCode.length ? inlineCode[idx] : match;
     });
 
     // Cleanup
