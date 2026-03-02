@@ -507,20 +507,29 @@ Item {
                                     color: Theme.surfaceVariantText
                                 }
                                 DankDropdown {
+                                    readonly property var _presets: ({
+                                        "None": "",
+                                        "Concise": "Be concise. Answer in as few words as possible while remaining helpful and accurate.",
+                                        "Code Expert": "You are an expert programmer. Provide clean, well-structured code with brief explanations. Prefer practical solutions.",
+                                        "Translator": "You are a translator. Translate the user's text to the target language they specify. If no language is specified, translate to English.",
+                                        "Writing Editor": "You are a writing editor. Improve clarity, grammar, and flow while preserving the author's voice and intent."
+                                    })
+
+                                    function _presetNameFor(prompt) {
+                                        var keys = Object.keys(_presets);
+                                        for (var i = 0; i < keys.length; i++) {
+                                            if (_presets[keys[i]] === prompt) return keys[i];
+                                        }
+                                        return "(custom)";
+                                    }
+
                                     width: parent.width
                                     options: ["None", "Concise", "Code Expert", "Translator", "Writing Editor", "(custom)"]
-                                    currentValue: "None"
+                                    currentValue: _presetNameFor(aiService.systemPrompt)
                                     onValueChanged: value => {
-                                        var presets = {
-                                            "None": "",
-                                            "Concise": "Be concise. Answer in as few words as possible while remaining helpful and accurate.",
-                                            "Code Expert": "You are an expert programmer. Provide clean, well-structured code with brief explanations. Prefer practical solutions.",
-                                            "Translator": "You are a translator. Translate the user's text to the target language they specify. If no language is specified, translate to English.",
-                                            "Writing Editor": "You are a writing editor. Improve clarity, grammar, and flow while preserving the author's voice and intent."
-                                        };
-                                        if (presets.hasOwnProperty(value)) {
-                                            aiService.systemPrompt = presets[value];
-                                            aiService.saveSettingValue("systemPrompt", presets[value]);
+                                        if (_presets.hasOwnProperty(value)) {
+                                            aiService.systemPrompt = _presets[value];
+                                            aiService.saveSettingValue("systemPrompt", _presets[value]);
                                         }
                                     }
                                 }
@@ -631,10 +640,10 @@ Item {
                                     Column {
                                         anchors.verticalCenter: parent.verticalCenter
                                         spacing: Theme.spacingXS
-                                        width: parent.width - parent.spacing - Theme.iconSize
+                                        width: parent.width - parent.spacing * 2 - Theme.iconSize - unlimitedToggle.width
 
                                         StyledText {
-                                            text: "Max Tokens: " + aiService.maxTokens
+                                            text: "Max Tokens: " + (aiService.unlimitedTokens ? "No limit" : aiService.maxTokens)
                                             font.pixelSize: Theme.fontSizeMedium
                                             font.weight: Font.Medium
                                             color: Theme.surfaceText
@@ -648,16 +657,28 @@ Item {
                                             width: parent.width
                                         }
                                     }
+
+                                    Switch {
+                                        id: unlimitedToggle
+                                        checked: aiService.unlimitedTokens
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        onToggled: {
+                                            aiService.unlimitedTokens = checked;
+                                            aiService.saveSettingValue("unlimitedTokens", checked);
+                                        }
+                                    }
                                 }
 
                                 DankSlider {
                                     width: parent.width
                                     height: 32
                                     minimum: 256
-                                    maximum: 16384
-                                    step: 256
+                                    maximum: 131072
+                                    step: 1024
                                     value: aiService.maxTokens
                                     showValue: false
+                                    enabled: !aiService.unlimitedTokens
+                                    opacity: aiService.unlimitedTokens ? 0.4 : 1.0
                                     onSliderValueChanged: newValue => {
                                         aiService.maxTokens = newValue;
                                         aiService.saveSettingValue("maxTokens", newValue);

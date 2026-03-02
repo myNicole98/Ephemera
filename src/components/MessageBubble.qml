@@ -206,7 +206,7 @@ Item {
                     iconName: "edit"
                     buttonSize: 24
                     iconSize: 14
-                    backgroundColor: "transparent"
+                    backgroundColor: Theme.withAlpha(Theme.surfaceContainer, 0)
                     iconColor: Theme.primary
                     tooltipText: "Edit"
                     onClicked: {
@@ -235,7 +235,7 @@ Item {
                         iconName: "chevron_left"
                         buttonSize: 24
                         iconSize: 14
-                        backgroundColor: "transparent"
+                        backgroundColor: Theme.withAlpha(Theme.surfaceContainer, 0)
                         iconColor: Theme.surfaceVariantText
                         enabled: root.variantIndex > 0
                         opacity: enabled ? 1.0 : 0.3
@@ -253,7 +253,7 @@ Item {
                         iconName: "chevron_right"
                         buttonSize: 24
                         iconSize: 14
-                        backgroundColor: "transparent"
+                        backgroundColor: Theme.withAlpha(Theme.surfaceContainer, 0)
                         iconColor: Theme.surfaceVariantText
                         enabled: root.variantIndex < root.variantCount - 1
                         opacity: enabled ? 1.0 : 0.3
@@ -268,7 +268,7 @@ Item {
                     iconName: _copied ? "check" : "content_copy"
                     buttonSize: 24
                     iconSize: 14
-                    backgroundColor: "transparent"
+                    backgroundColor: Theme.withAlpha(Theme.surfaceContainer, 0)
                     iconColor: _copied ? Theme.success : Theme.surfaceVariantText
                     tooltipText: _copied ? "Copied!" : "Copy"
                     property bool _copied: false
@@ -295,7 +295,7 @@ Item {
                     iconName: "refresh"
                     buttonSize: 24
                     iconSize: 14
-                    backgroundColor: "transparent"
+                    backgroundColor: Theme.withAlpha(Theme.surfaceContainer, 0)
                     iconColor: Theme.surfaceVariantText
                     tooltipText: "Regenerate"
                     onClicked: root.regenerateRequested()

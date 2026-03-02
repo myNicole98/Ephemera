@@ -93,9 +93,9 @@ function ollamaRequest(payload) {
     var body = {
         model: payload.model,
         messages: payload.messages,
-        max_tokens: payload.max_tokens || 4096,
         stream: true
     };
+    if (payload.max_tokens > 0) body.max_tokens = payload.max_tokens;
     if (temp !== undefined) body.temperature = temp;
     // No auth header for Ollama
     return { url: url, headers: [], body: JSON.stringify(body) };
@@ -110,9 +110,9 @@ function openaiRequest(payload, apiKey) {
     var body = {
         model: payload.model,
         messages: payload.messages,
-        max_tokens: payload.max_tokens || 4096,
         stream: true
     };
+    if (payload.max_tokens > 0) body.max_tokens = payload.max_tokens;
     if (temp !== undefined) body.temperature = temp;
     return { url: url, headers: headers, body: JSON.stringify(body) };
 }
@@ -141,7 +141,8 @@ function anthropicRequest(payload, apiKey) {
         });
     }
 
-    var maxTokens = payload.max_tokens || 4096;
+    // Anthropic requires max_tokens — use 128000 as high cap when unlimited
+    var maxTokens = (payload.max_tokens > 0) ? payload.max_tokens : 128000;
     // Anthropic requires temperature=1 when extended thinking is enabled
     var temp = payload.thinkingEnabled ? 1 : clampTemperature("anthropic", payload.model, payload.temperature);
     var body = {
@@ -182,7 +183,8 @@ function geminiRequest(payload, apiKey) {
     }
 
     var temp = clampTemperature("gemini", payload.model, payload.temperature);
-    var genConfig = { maxOutputTokens: payload.max_tokens || 4096 };
+    var genConfig = {};
+    if (payload.max_tokens > 0) genConfig.maxOutputTokens = payload.max_tokens;
     if (temp !== undefined) genConfig.temperature = temp;
     var body = {
         contents: contents,

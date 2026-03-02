@@ -22,6 +22,14 @@ Item {
         composer.forceActiveFocus();
     }
 
+    Connections {
+        target: aiService
+        function onIsStreamingChanged() {
+            if (!aiService.isStreaming && root.visible)
+                composer.forceActiveFocus();
+        }
+    }
+
     onVisibleChanged: {
         if (!visible) {
             showSettings = false;
@@ -85,7 +93,7 @@ Item {
                         return Theme.withAlpha(Theme.primary, 0.3);
                     return Theme.surfaceVariant;
                 }
-                border.color: (aiService.missingApiKey || aiService.lastRequestFailed) ? Theme.withAlpha(Theme.error, 0.4) : "transparent"
+                border.color: (aiService.missingApiKey || aiService.lastRequestFailed) ? Theme.withAlpha(Theme.error, 0.4) : Theme.withAlpha(Theme.outline, 0)
                 border.width: (aiService.missingApiKey || aiService.lastRequestFailed) ? 1 : 0
                 height: Theme.fontSizeSmall * 1.6
                 Layout.preferredWidth: root.slideoutExpanded ? 320 : 160
@@ -164,7 +172,7 @@ Item {
                 tooltipText: "Clear chat"
                 visible: root.slideoutExpanded
                 enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                onClicked: clearConfirmDialog.open()
+                onClicked: { aiService.clearChat(); composer.text = ""; composer.forceActiveFocus(); }
             }
 
             DankActionButton {
@@ -198,7 +206,7 @@ Item {
                             enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
                             onClicked: { aiService.exportConversation(); showToast("Conversation copied to clipboard"); overflowMenu.close(); }
                             background: Rectangle {
-                                color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : "transparent"
+                                color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : Theme.withAlpha(Theme.primary, 0)
                                 radius: Theme.cornerRadius
                             }
 
@@ -228,7 +236,7 @@ Item {
                             enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
                             onClicked: { var f = aiService.exportConversationToFile(); showToast("Saved to " + f.split("/").pop()); overflowMenu.close(); }
                             background: Rectangle {
-                                color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : "transparent"
+                                color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : Theme.withAlpha(Theme.primary, 0)
                                 radius: Theme.cornerRadius
                             }
 
@@ -256,9 +264,9 @@ Item {
                             width: parent.width
                             height: 36
                             enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                            onClicked: { overflowMenu.close(); clearConfirmDialog.open(); }
+                            onClicked: { overflowMenu.close(); aiService.clearChat(); composer.text = ""; composer.forceActiveFocus(); }
                             background: Rectangle {
-                                color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : "transparent"
+                                color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : Theme.withAlpha(Theme.primary, 0)
                                 radius: Theme.cornerRadius
                             }
 
@@ -548,7 +556,7 @@ Item {
                         id: composer
                         implicitWidth: scrollView.availableWidth
                         wrapMode: TextArea.Wrap
-                        background: Rectangle { color: "transparent" }
+                        background: Rectangle { color: Theme.withAlpha(Theme.surfaceContainer, 0) }
                         font.pixelSize: Theme.fontSizeMedium
                         font.family: Theme.fontFamily
                         font.weight: Theme.fontWeight
@@ -745,6 +753,14 @@ Item {
         }
     }
 
+    // -- Clear chat dim overlay (scoped to widget, not full window) --
+    Rectangle {
+        anchors.fill: parent
+        color: Theme.withAlpha(Theme.onSurface, 0.4)
+        visible: clearConfirmDialog.visible
+        z: 99
+    }
+
     // -- Clear chat confirmation dialog --
     Popup {
         id: clearConfirmDialog
@@ -752,11 +768,8 @@ Item {
         width: Math.min(320, root.width - Theme.spacingL * 2)
         padding: Theme.spacingL
         modal: true
-        dim: true
-
-        Overlay.modal: Rectangle {
-            color: Qt.rgba(0, 0, 0, 0.4)
-        }
+        dim: false
+        onOpened: clearConfirmBtn.forceActiveFocus()
 
         background: Rectangle {
             color: Theme.surfaceContainerHighest
@@ -806,9 +819,13 @@ Item {
                 }
 
                 DankButton {
+                    id: clearConfirmBtn
                     text: "Clear"
+                    focus: true
                     backgroundColor: Theme.error
                     textColor: Theme.onPrimary
+                    Keys.onReturnPressed: clicked()
+                    Keys.onEnterPressed: clicked()
                     onClicked: {
                         aiService.clearChat();
                         composer.text = "";

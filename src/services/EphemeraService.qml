@@ -33,6 +33,7 @@ Item {
     property string model: ""
     property real temperature: 0.7
     property int maxTokens: 4096
+    property bool unlimitedTokens: false
     property int maxTurns: 10
     property int timeout: 300
     property string systemPrompt: ""
@@ -104,6 +105,7 @@ Item {
         timeout = PluginService.loadPluginData(pluginId, "timeout", 300);
         systemPrompt = String(PluginService.loadPluginData(pluginId, "systemPrompt", "")).trim();
         thinkingEnabled = PluginService.loadPluginData(pluginId, "thinkingEnabled", false) === true;
+        unlimitedTokens = PluginService.loadPluginData(pluginId, "unlimitedTokens", false) === true;
         persistChat = PluginService.loadPluginData(pluginId, "persistChat", false) === true;
         ollamaManager.ollamaIdleMinutes = Number(PluginService.loadPluginData(pluginId, "ollamaIdleMinutes", 5)) || 5;
 
@@ -510,7 +512,7 @@ Item {
             baseUrl: baseUrl,
             model: model,
             temperature: temperature,
-            max_tokens: maxTokens,
+            max_tokens: unlimitedTokens ? 0 : maxTokens,
             messages: msgs,
             stream: true,
             timeout: timeout,
