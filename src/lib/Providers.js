@@ -260,8 +260,14 @@ function clampTemperature(provider, model, temperature) {
     if (info.tempUnsupportedModels) {
         var m = (model || "").toLowerCase();
         for (var i = 0; i < info.tempUnsupportedModels.length; i++) {
-            if (m.indexOf(info.tempUnsupportedModels[i]) === 0)
-                return undefined;
+            var prefix = info.tempUnsupportedModels[i];
+            if (m === prefix) return undefined;
+            // Match prefix followed by a separator (e.g. "o1-mini", "o3-preview")
+            // but not a continuation like "o1.5" or "o100"
+            if (m.indexOf(prefix) === 0) {
+                var next = m.charAt(prefix.length);
+                if (next === "-" || next === "_") return undefined;
+            }
         }
     }
     var t = (temperature !== undefined && temperature !== null) ? temperature : info.tempDefault;

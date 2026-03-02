@@ -218,9 +218,11 @@ Item {
             messageIndexMap = ({});
             for (var i = 0; i < msgs.length; i++) {
                 var m = msgs[i];
+                // Messages stuck in "streaming" from a previous crash are stale — mark them ok
+                var status = (m.status === "streaming") ? "ok" : (m.status || "ok");
                 messagesModel.append({
                     role: m.role, content: m.content, thinking: m.thinking || "",
-                    id: m.id, timestamp: m.timestamp, status: m.status || "ok",
+                    id: m.id, timestamp: m.timestamp, status: status,
                     variantIndex: m.variantIndex || 0, variantCount: m.variantCount || 1,
                     modelName: m.modelName || ""
                 });
@@ -290,15 +292,17 @@ Item {
             evicted++;
         }
         if (evicted > 0) {
-            var newCount = store[msgId].length;
-            _streamVariantIndex = Math.max(0, Math.min(_streamVariantIndex - evicted, newCount - 1));
+            var storeLen = store[msgId].length;
+            _streamVariantIndex = Math.max(0, Math.min(_streamVariantIndex - evicted, storeLen - 1));
             var idx = findIndexById(msgId);
             if (idx >= 0) {
                 var msg = messagesModel.get(idx);
                 if (msg) {
-                    var newVariantIndex = Math.max(0, Math.min(msg.variantIndex - evicted, newCount - 1));
+                    var newVariantIndex = Math.max(0, Math.min(msg.variantIndex - evicted, storeLen - 1));
+                    // Account for a currently-streaming variant not yet in the store
+                    var logicalCount = (isStreaming && activeStreamId === msgId) ? storeLen + 1 : storeLen;
                     messagesModel.setProperty(idx, "variantIndex", newVariantIndex);
-                    messagesModel.setProperty(idx, "variantCount", newCount);
+                    messagesModel.setProperty(idx, "variantCount", logicalCount);
                 }
             }
         }
@@ -321,7 +325,7 @@ Item {
         }
 
         var store = variantStore;
-        if (!store[msgId] || !store[msgId][newIndex]) return;
+        if (!store[msgId] || newIndex >= store[msgId].length || !store[msgId][newIndex]) return;
 
         var variant = store[msgId][newIndex];
         messagesModel.setProperty(idx, "content", variant.content);

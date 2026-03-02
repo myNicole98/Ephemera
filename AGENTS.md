@@ -44,6 +44,7 @@ Depends on parent config modules: `qs.Common` (Theme, StyledText), `qs.Widgets` 
 
 - API keys: env vars only, never persisted by PluginService.
 - curl stdin for request bodies (not `/proc/cmdline`-visible args).
+- **Known trade-off: API key header visibility** — API keys are passed via curl `-H` headers (e.g., `Authorization: Bearer ...`), which are visible in `/proc/<pid>/cmdline` and `ps` output for the brief lifetime of the curl process. Request *bodies* (containing conversation content) are safely passed via stdin. Moving headers to a temp file or `--header @file` would add complexity and race conditions with cleanup; the current approach matches how most CLI tools handle auth headers.
 - HTML escaped before markdown rendering; link schemes whitelisted to http/https.
 - Custom URLs validated: http(s) only, valid hostname, max 2048 chars.
 - Chat persistence opt-in; API keys never stored regardless.
