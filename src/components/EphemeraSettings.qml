@@ -528,9 +528,12 @@ Item {
                                     currentValue: _presetNameFor(aiService.systemPrompt)
                                     onValueChanged: value => {
                                         if (_presets.hasOwnProperty(value)) {
+                                            systemPromptArea.text = _presets[value];
                                             aiService.systemPrompt = _presets[value];
                                             aiService.saveSettingValue("systemPrompt", _presets[value]);
                                         }
+                                        if (value === "(custom)")
+                                            systemPromptArea.forceActiveFocus();
                                     }
                                 }
                                 Rectangle {
@@ -562,9 +565,15 @@ Item {
                                             background: null
                                             padding: 0
 
-                                            onEditingFinished: {
+                                            onTextChanged: {
                                                 aiService.systemPrompt = text;
-                                                aiService.saveSettingValue("systemPrompt", text);
+                                                _systemPromptSaveTimer.restart();
+                                            }
+
+                                            Timer {
+                                                id: _systemPromptSaveTimer
+                                                interval: 500
+                                                onTriggered: aiService.saveSettingValue("systemPrompt", systemPromptArea.text)
                                             }
                                         }
                                     }
