@@ -75,6 +75,8 @@ var StreamParser = loadPragmaLib("src/lib/StreamParser.js");
 var Providers = loadPragmaLib("src/lib/Providers.js");
 var Markdown = loadPragmaLib("src/lib/Markdown.js");
 var ChatExport = loadPragmaLib("src/lib/ChatExport.js");
+var VariantStore = loadPragmaLib("src/lib/VariantStore.js");
+var ErrorHints = loadPragmaLib("src/lib/ErrorHints.js");
 
 // ═════════════════════════════════════════════════════════════════
 //  StreamParser tests
@@ -917,6 +919,153 @@ section("ChatExport.generateFilename");
 
     f = ChatExport.generateFilename(null);
     assert(f.indexOf("ephemera-chat-") >= 0, "null home dir handled");
+})();
+
+// ═════════════════════════════════════════════════════════════════
+// VariantStore.js tests
+// ═════════════════════════════════════════════════════════════════
+
+section("VariantStore.saveVariant");
+
+(function() {
+    var store = {};
+    var result = VariantStore.saveVariant(store, "msg1", 0, "hello", "thinking", "gpt-4", 10);
+    assertEqual(result.evicted, 0, "no eviction on first save");
+    assertEqual(result.store["msg1"][0].content, "hello", "content saved");
+    assertEqual(result.store["msg1"][0].thinking, "thinking", "thinking saved");
+    assertEqual(result.store["msg1"][0].modelName, "gpt-4", "modelName saved");
+})();
+
+(function() {
+    var store = {};
+    var idx = 0;
+    for (var i = 0; i < 12; i++) {
+        var result = VariantStore.saveVariant(store, "msg1", idx, "v" + i, "", "m" + i, 10);
+        idx = Math.max(0, idx - result.evicted) + 1;
+    }
+    assertEqual(store["msg1"].length, 10, "capped at maxVariants");
+    assertEqual(store["msg1"][0].content, "v2", "FIFO eviction removes oldest");
+})();
+
+(function() {
+    var store = {};
+    VariantStore.saveVariant(store, "msg1", 0, "a", "", "", 10);
+    VariantStore.saveVariant(store, "msg1", 1, "b", "", "", 10);
+    var result = VariantStore.saveVariant(store, "msg1", 0, "updated", "", "", 10);
+    assertEqual(result.store["msg1"][0].content, "updated", "overwrite existing variant");
+    assertEqual(result.evicted, 0, "no eviction on overwrite");
+})();
+
+section("VariantStore.getVariant");
+
+(function() {
+    var store = {};
+    VariantStore.saveVariant(store, "msg1", 0, "content", "think", "model", 10);
+    var v = VariantStore.getVariant(store, "msg1", 0);
+    assertEqual(v.content, "content", "gets correct variant");
+    assertEqual(v.thinking, "think", "gets thinking");
+    assertEqual(v.modelName, "model", "gets model name");
+
+    var missing = VariantStore.getVariant(store, "msg1", 5);
+    assertEqual(missing, null, "returns null for missing index");
+
+    var missingMsg = VariantStore.getVariant(store, "noMsg", 0);
+    assertEqual(missingMsg, null, "returns null for missing msgId");
+})();
+
+section("VariantStore.removeVariants");
+
+(function() {
+    var store = {};
+    VariantStore.saveVariant(store, "msg1", 0, "a", "", "", 10);
+    VariantStore.saveVariant(store, "msg2", 0, "b", "", "", 10);
+    VariantStore.removeVariants(store, "msg1");
+    assertEqual(store["msg1"], undefined, "removes variants for msgId");
+    assertEqual(store["msg2"][0].content, "b", "preserves other messages");
+})();
+
+section("VariantStore.adjustAfterEviction");
+
+(function() {
+    var adj = VariantStore.adjustAfterEviction(2, 5, 8, false);
+    assertEqual(adj.variantIndex, 3, "adjusts index by eviction count");
+    assertEqual(adj.variantCount, 8, "count equals store length when not streaming");
+
+    adj = VariantStore.adjustAfterEviction(2, 5, 8, true);
+    assertEqual(adj.variantCount, 9, "count includes streaming variant");
+
+    adj = VariantStore.adjustAfterEviction(5, 3, 2, false);
+    assertEqual(adj.variantIndex, 0, "clamps to 0 when eviction exceeds index");
+})();
+
+// ═════════════════════════════════════════════════════════════════
+// ErrorHints.js tests
+// ═════════════════════════════════════════════════════════════════
+
+section("ErrorHints.httpErrorHint");
+
+(function() {
+    assert(ErrorHints.httpErrorHint(401).indexOf("API key") >= 0, "401 mentions API key");
+    assert(ErrorHints.httpErrorHint(403).indexOf("denied") >= 0, "403 mentions denied");
+    assert(ErrorHints.httpErrorHint(404).indexOf("not found") >= 0, "404 mentions not found");
+    assert(ErrorHints.httpErrorHint(429).indexOf("Rate limited") >= 0, "429 mentions rate limited");
+    assert(ErrorHints.httpErrorHint(500).indexOf("Server error") >= 0, "500 mentions server error");
+    assert(ErrorHints.httpErrorHint(503).indexOf("unavailable") >= 0, "503 mentions unavailable");
+    assertEqual(ErrorHints.httpErrorHint(200), "", "200 returns empty string");
+    assertEqual(ErrorHints.httpErrorHint(999), "", "unknown status returns empty");
+})();
+
+section("ErrorHints.curlExitHint");
+
+(function() {
+    var h = ErrorHints.curlExitHint(6, "openai", "OpenAI", "");
+    assert(h.indexOf("resolve host") >= 0, "exit 6 mentions DNS");
+
+    h = ErrorHints.curlExitHint(7, "ollama", "Ollama", "http://localhost:11434");
+    assert(h.indexOf("Ollama") >= 0, "exit 7 ollama mentions Ollama");
+    assert(h.indexOf("11434") >= 0, "exit 7 ollama includes URL");
+
+    h = ErrorHints.curlExitHint(7, "openai", "OpenAI", "");
+    assert(h.indexOf("OpenAI") >= 0, "exit 7 non-ollama mentions provider name");
+
+    h = ErrorHints.curlExitHint(28, "openai", "OpenAI", "");
+    assert(h.indexOf("timed out") >= 0, "exit 28 mentions timeout");
+
+    h = ErrorHints.curlExitHint(35, "openai", "OpenAI", "");
+    assert(h.indexOf("TLS") >= 0, "exit 35 mentions TLS");
+
+    h = ErrorHints.curlExitHint(99, "openai", "OpenAI", "");
+    assert(h.indexOf("99") >= 0, "unknown exit code included in message");
+})();
+
+// ═════════════════════════════════════════════════════════════════
+// Providers.validateUrl tests
+// ═════════════════════════════════════════════════════════════════
+
+section("Providers.validateUrl");
+
+(function() {
+    var r = Providers.validateUrl("https://api.openai.com");
+    assert(r.valid, "valid https URL");
+    assertEqual(r.error, "", "no error for valid URL");
+
+    r = Providers.validateUrl("http://localhost:11434");
+    assert(r.valid, "valid http localhost URL");
+
+    r = Providers.validateUrl("ftp://example.com");
+    assert(!r.valid, "rejects ftp scheme");
+    assert(r.error.indexOf("http://") >= 0, "error mentions http");
+
+    r = Providers.validateUrl("");
+    assert(!r.valid, "empty is invalid");
+    assertEqual(r.error, "", "empty has no error message");
+
+    r = Providers.validateUrl("https://" + "a".repeat(2050));
+    assert(!r.valid, "rejects too-long URL");
+    assert(r.error.indexOf("2048") >= 0, "error mentions limit");
+
+    r = Providers.validateUrl("https://!@#$");
+    assert(!r.valid, "rejects invalid hostname");
 })();
 
 // ─── Summary ───────────────────────────────────────────────────

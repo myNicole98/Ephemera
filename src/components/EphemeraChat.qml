@@ -6,6 +6,7 @@ import Quickshell
 import qs.Common
 import qs.Services
 import qs.Widgets
+import "../lib/Providers.js" as Providers
 
 Item {
     id: root
@@ -130,6 +131,97 @@ Item {
                     onTextChanged: {
                         providerPill._flashing = true;
                         providerFlashTimer.start();
+                    }
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: modelSelectorPopup.open()
+                }
+
+                Popup {
+                    id: modelSelectorPopup
+                    y: providerPill.height + Theme.spacingXS
+                    width: Math.max(220, providerPill.width)
+                    padding: Theme.spacingS
+
+                    background: Rectangle {
+                        color: Theme.surfaceContainerHighest
+                        radius: Theme.cornerRadius
+                        border.color: Theme.outline
+                        border.width: 1
+                    }
+
+                    Column {
+                        width: parent.width
+                        spacing: Theme.spacingXS
+
+                        // Model text field for quick entry
+                        DankTextField {
+                            id: quickModelField
+                            width: parent.width
+                            text: aiService.model
+                            placeholderText: {
+                                var info = Providers.getProviderInfo(aiService.provider);
+                                return info.modelPlaceholder || "model-name";
+                            }
+                            onEditingFinished: {
+                                aiService.model = text.trim();
+                                aiService.saveSettingValue("model", text.trim());
+                            }
+                            Keys.onReturnPressed: {
+                                editingFinished();
+                                modelSelectorPopup.close();
+                            }
+
+                            Component.onCompleted: {
+                                quickModelField.forceActiveFocus();
+                                quickModelField.selectAll();
+                            }
+                        }
+
+                        // Ollama model list (only shown when Ollama has discovered models)
+                        Column {
+                            width: parent.width
+                            spacing: 0
+                            visible: aiService.provider === "ollama" && aiService.availableModels.count > 0
+
+                            Rectangle {
+                                width: parent.width
+                                height: 1
+                                color: Theme.withAlpha(Theme.outline, 0.15)
+                            }
+
+                            Repeater {
+                                model: aiService.availableModels
+
+                                ItemDelegate {
+                                    width: parent.width
+                                    height: 32
+                                    onClicked: {
+                                        aiService.model = model.name;
+                                        aiService.saveSettingValue("model", model.name);
+                                        modelSelectorPopup.close();
+                                    }
+                                    background: Rectangle {
+                                        color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : Theme.withAlpha(Theme.primary, 0)
+                                        radius: Theme.cornerRadius
+                                    }
+
+                                    contentItem: StyledText {
+                                        text: model.name
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        font.family: Theme.monoFontFamily
+                                        color: model.name === aiService.model ? Theme.primary : Theme.surfaceText
+                                        font.weight: model.name === aiService.model ? Font.Medium : Font.Normal
+                                        wrapMode: Text.NoWrap
+                                        elide: Text.ElideRight
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -335,6 +427,7 @@ Item {
                 modelName: aiService.model || "Assistant"
                 expanded: root.slideoutExpanded
                 canRegenerate: !aiService.isStreaming && aiService.lastUserText.length > 0
+                streamStartTime: aiService.streamStartTime
                 onRegenerateRequested: aiService.regenerate()
                 onVariantChangeRequested: (msgId, newIndex) => aiService.switchVariant(msgId, newIndex)
                 onEditRequested: (msgId, newText) => aiService.editAndRegenerate(msgId, newText)
@@ -381,16 +474,7 @@ Item {
 
                     StyledText {
                         width: parent.width
-                        text: {
-                            var envVar = "";
-                            switch (aiService.provider) {
-                            case "openai": envVar = "OPENAI_API_KEY"; break;
-                            case "anthropic": envVar = "ANTHROPIC_API_KEY"; break;
-                            case "gemini": envVar = "GEMINI_API_KEY"; break;
-                            default: envVar = "EPHEMERA_API_KEY"; break;
-                            }
-                            return "Set the " + envVar + " environment variable before starting Quickshell.";
-                        }
+                        text: "Set the " + aiService._envVarForProvider(aiService.provider) + " environment variable before starting Quickshell."
                         font.pixelSize: Theme.fontSizeSmall
                         font.family: Theme.fontFamily
                         color: Theme.surfaceTextMedium

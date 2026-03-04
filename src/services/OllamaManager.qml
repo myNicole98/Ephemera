@@ -36,9 +36,16 @@ Item {
         _shuttingDown = true;
         ollamaIdleTimer.stop();
         retryTimer.stop();
-        if (ollamaWeStarted && ollamaProcess.running)
-            ollamaProcess.running = false;
-        _kill();
+        if (ollamaWeStarted) {
+            if (_ollamaPid > 0) {
+                // Kill by PID — precise, no collateral damage
+                ollamaKiller.command = ["kill", String(_ollamaPid)];
+                ollamaKiller.running = true;
+                _ollamaPid = -1;
+            }
+            if (ollamaProcess.running)
+                ollamaProcess.running = false;
+        }
         ollamaWeStarted = false;
         ollamaStartPending = false;
         ollamaReady = false;
@@ -48,7 +55,9 @@ Item {
         _shuttingDown = true;
         ollamaIdleTimer.stop();
         retryTimer.stop();
-        _kill();
+        // External Ollama: use pkill since we don't have a PID
+        ollamaKiller.command = ["pkill", "-U", Quickshell.env("USER") || "", "-f", "ollama serve"];
+        ollamaKiller.running = true;
         ollamaReady = false;
         ollamaExternallyManaged = false;
         ollamaWeStarted = false;
@@ -85,10 +94,8 @@ Item {
             ollamaKiller.command = ["kill", String(_ollamaPid)];
             ollamaKiller.running = true;
             _ollamaPid = -1;
-        } else {
-            ollamaKiller.command = ["pkill", "-f", "ollama serve"];
-            ollamaKiller.running = true;
         }
+        // No pkill fallback — if we lost the PID, we don't kill random processes
     }
 
     function ping() {

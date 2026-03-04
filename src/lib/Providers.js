@@ -6,11 +6,24 @@
 //   2. Gemini key as header (x-goog-api-key) — not in URL query param
 //   3. No --compressed flag (breaks StdioCollector)
 
+// Validate a URL for use as a provider base URL.
+// Returns { valid: bool, error: string } — error is empty when valid.
+function validateUrl(url) {
+    var u = (url || "").trim();
+    if (!u) return { valid: false, error: "" }; // empty is not an error, just absent
+    if (u.length > 2048)
+        return { valid: false, error: "URL is too long (max 2048 characters)." };
+    if (!/^https?:\/\//i.test(u))
+        return { valid: false, error: "Must start with http:// or https://" };
+    if (!/^https?:\/\/[a-zA-Z0-9\-_.:]/.test(u))
+        return { valid: false, error: "Invalid hostname in URL." };
+    return { valid: true, error: "" };
+}
+
 function normalizeBaseUrl(url) {
     var u = (url || "").trim();
     if (!u) return "";
-    if (!/^https?:\/\//i.test(u)) return "";
-    if (u.length > 2048) return "";
+    if (!validateUrl(u).valid) return "";
     return u.endsWith("/") ? u.slice(0, -1) : u;
 }
 
@@ -210,7 +223,8 @@ var registry = {
         envVar: null,
         defaultUrl: "http://localhost:11434",
         needsKey: false,
-        tempMin: 0.0, tempMax: 2.0, tempDefault: 0.8
+        tempMin: 0.0, tempMax: 2.0, tempDefault: 0.8,
+        modelPlaceholder: "llama3.2"
     },
     "openai": {
         name: "OpenAI",
@@ -218,6 +232,7 @@ var registry = {
         defaultUrl: "https://api.openai.com",
         needsKey: true,
         tempMin: 0.0, tempMax: 2.0, tempDefault: 1.0,
+        modelPlaceholder: "gpt-4o",
         // o1/o3 reasoning models don't support temperature
         tempUnsupportedModels: ["o1", "o3"]
     },
@@ -226,21 +241,24 @@ var registry = {
         envVar: "ANTHROPIC_API_KEY",
         defaultUrl: "https://api.anthropic.com",
         needsKey: true,
-        tempMin: 0.0, tempMax: 1.0, tempDefault: 1.0
+        tempMin: 0.0, tempMax: 1.0, tempDefault: 1.0,
+        modelPlaceholder: "claude-sonnet-4-5"
     },
     "gemini": {
         name: "Gemini",
         envVar: "GEMINI_API_KEY",
         defaultUrl: "https://generativelanguage.googleapis.com",
         needsKey: true,
-        tempMin: 0.0, tempMax: 2.0, tempDefault: 1.0
+        tempMin: 0.0, tempMax: 2.0, tempDefault: 1.0,
+        modelPlaceholder: "gemini-2.5-flash"
     },
     "custom": {
         name: "custom provider",
         envVar: "EPHEMERA_API_KEY",
         defaultUrl: "https://api.openai.com",
         needsKey: true,
-        tempMin: 0.0, tempMax: 2.0, tempDefault: 0.7
+        tempMin: 0.0, tempMax: 2.0, tempDefault: 0.7,
+        modelPlaceholder: "model-name"
     }
 };
 

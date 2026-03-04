@@ -6,6 +6,8 @@ import qs.Services
 import "../lib/Providers.js" as Providers
 import "../lib/StreamParser.js" as StreamParser
 import "../lib/ChatExport.js" as ChatExport
+import "../lib/VariantStore.js" as VariantStore
+import "../lib/ErrorHints.js" as ErrorHints
 
 Item {
     id: root
@@ -165,6 +167,12 @@ Item {
         return Quickshell.env(info.envVar) || "";
     }
 
+    function hasApiKeyForProvider(prov) {
+        var info = Providers.getProviderInfo(prov);
+        if (!info.envVar) return true; // no key needed (e.g. Ollama)
+        return (Quickshell.env(info.envVar) || "").length > 0;
+    }
+
     function _envVarForProvider(prov) {
         var info = Providers.getProviderInfo(prov);
         return info.envVar || "EPHEMERA_API_KEY";
@@ -271,6 +279,7 @@ Item {
 
         activeStreamId = msgId;
         isStreaming = true;
+        streamStartTime = Date.now();
         lastHttpStatus = 0;
         lastRequestFailed = false;
         _streamContent = "";
@@ -284,25 +293,21 @@ Item {
 
     function _saveVariant(msgId, index, content, thinking, variantModel) {
         var store = variantStore;
-        if (!store[msgId]) store[msgId] = [];
-        store[msgId][index] = { content: content || "", thinking: thinking || "", modelName: variantModel || "" };
-        var evicted = 0;
-        while (store[msgId].length > maxVariantsPerMessage) {
-            store[msgId].shift();
-            evicted++;
-        }
-        if (evicted > 0) {
+        var result = VariantStore.saveVariant(store, msgId, index, content, thinking, variantModel, maxVariantsPerMessage);
+
+        if (result.evicted > 0) {
             var storeLen = store[msgId].length;
-            _streamVariantIndex = Math.max(0, Math.min(_streamVariantIndex - evicted, storeLen - 1));
+            _streamVariantIndex = Math.max(0, Math.min(_streamVariantIndex - result.evicted, storeLen - 1));
             var idx = findIndexById(msgId);
             if (idx >= 0) {
                 var msg = messagesModel.get(idx);
                 if (msg) {
-                    var newVariantIndex = Math.max(0, Math.min(msg.variantIndex - evicted, storeLen - 1));
-                    // Account for a currently-streaming variant not yet in the store
-                    var logicalCount = (isStreaming && activeStreamId === msgId) ? storeLen + 1 : storeLen;
-                    messagesModel.setProperty(idx, "variantIndex", newVariantIndex);
-                    messagesModel.setProperty(idx, "variantCount", logicalCount);
+                    var adjusted = VariantStore.adjustAfterEviction(
+                        result.evicted, msg.variantIndex, storeLen,
+                        isStreaming && activeStreamId === msgId
+                    );
+                    messagesModel.setProperty(idx, "variantIndex", adjusted.variantIndex);
+                    messagesModel.setProperty(idx, "variantCount", adjusted.variantCount);
                 }
             }
         }
@@ -324,10 +329,8 @@ Item {
             return;
         }
 
-        var store = variantStore;
-        if (!store[msgId] || newIndex >= store[msgId].length || !store[msgId][newIndex]) return;
-
-        var variant = store[msgId][newIndex];
+        var variant = VariantStore.getVariant(variantStore, msgId, newIndex);
+        if (!variant) return;
         messagesModel.setProperty(idx, "content", variant.content);
         messagesModel.setProperty(idx, "thinking", variant.thinking);
         messagesModel.setProperty(idx, "variantIndex", newIndex);
@@ -357,6 +360,9 @@ Item {
         }
         variantStore = variantStore;
 
+        // Rebuild messageIndexMap to prevent stale indices after bulk removal
+        _rebuildIndexMap();
+
         lastUserText = newText.trim();
         ollamaManager.stopIdleTimer();
         lastRequestFailed = false;
@@ -367,6 +373,7 @@ Item {
         messageIndexMap[streamId] = messagesModel.count - 1;
         activeStreamId = streamId;
         isStreaming = true;
+        streamStartTime = Date.now();
         lastHttpStatus = 0;
         _streamContent = "";
         _streamThinking = "";
@@ -427,6 +434,7 @@ Item {
 
     property string streamBuffer: ""
     property string pendingStdinBody: ""
+    property real streamStartTime: 0
     property bool _insideThinkTag: false
     property string _tagBuffer: ""
     property string _streamContent: ""
@@ -456,6 +464,7 @@ Item {
         messageIndexMap[streamId] = messagesModel.count - 1;
         activeStreamId = streamId;
         isStreaming = true;
+        streamStartTime = Date.now();
         lastHttpStatus = 0;
         _streamContent = "";
         _streamThinking = "";
@@ -479,6 +488,8 @@ Item {
             return;
         }
 
+        // StdioCollector.text resets when the Process restarts (new stdout pipe).
+        // Reset our offset to match.
         streamCollector.lastLen = 0;
         streamBuffer = "";
         _insideThinkTag = false;
@@ -617,30 +628,21 @@ Item {
     }
 
     function httpErrorHint(status) {
-        switch (status) {
-        case 401: return "Check your API key \u2014 it may be missing or invalid.";
-        case 403: return "Access denied \u2014 verify your API key has the required permissions.";
-        case 404: return "Endpoint not found \u2014 check the model name and base URL.";
-        case 429: return "Rate limited \u2014 wait a moment and try again.";
-        case 500: return "Server error \u2014 the provider may be experiencing issues.";
-        case 503: return "Service unavailable \u2014 the provider may be overloaded.";
-        default: return "";
-        }
+        return ErrorHints.httpErrorHint(status);
     }
 
     function _curlExitHint(exitCode) {
-        switch (exitCode) {
-        case 6: return "Could not resolve host.\nCheck the provider URL and your DNS settings.";
-        case 7: return provider === "ollama"
-            ? "Connection refused \u2014 Ollama appears to be down.\nMake sure Ollama is running at " + ollamaUrl + "."
-            : "Connection refused \u2014 " + _providerDisplayName(provider) + " is unreachable.";
-        case 28: return "Request timed out.\nThe provider took too long to respond.";
-        case 35: return "TLS/SSL connection error.\nCheck the provider URL and your network.";
-        default: return "Request failed (exit code " + exitCode + ").";
-        }
+        return ErrorHints.curlExitHint(exitCode, provider, _providerDisplayName(provider), ollamaUrl);
     }
 
     // ─── Message helpers ───────────────────────────────────────────
+
+    function _rebuildIndexMap() {
+        var map = {};
+        for (var i = 0; i < messagesModel.count; i++)
+            map[messagesModel.get(i).id] = i;
+        messageIndexMap = map;
+    }
 
     function findIndexById(msgId) {
         return messageIndexMap[msgId] !== undefined ? messageIndexMap[msgId] : -1;

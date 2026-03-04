@@ -6,9 +6,11 @@ Ephemera is a DankMaterialShell daemon plugin (`"type": "daemon"`) providing an 
 
 ## Setup
 
-No standalone build or test system. Symlink into the parent Quickshell config's plugin path and reload the shell. Source lives in `src/`. Hot-reload with `dms ipc call plugins reload ephemera`.
+Symlink into the parent Quickshell config's plugin path and reload the shell. Source lives in `src/`. Hot-reload with `dms restart` (full restart required — DMS caches compiled QML in-process; `dms ipc call plugins reload ephemera` does NOT reliably pick up all changes).
 
 Depends on parent config modules: `qs.Common` (Theme, StyledText), `qs.Widgets` (Dank* components), `qs.Services` (PluginService).
+
+Unit tests: `node tests/run_tests.js` — tests pure JS modules (Providers.js, StreamParser.js, Markdown.js, ChatExport.js, VariantStore.js, ErrorHints.js).
 
 ## Gotchas & Landmines
 
@@ -25,7 +27,7 @@ Depends on parent config modules: `qs.Common` (Theme, StyledText), `qs.Widgets` 
 
 - **Root IDs** — root items: `id: root`, delegate roots: `id: delegate`.
 - **Private properties** — prefix with `_` (e.g., `_streamContent`, `_shuttingDown`).
-- **JS libraries** — `Providers.js` and `Markdown.js` are pure-function, no QML imports. Import with namespace aliases (`as Providers`).
+- **JS libraries** — all `.js` files in `src/lib/` are `.pragma library` pure-function modules (no QML imports). Import with namespace aliases (`as Providers`). Testable via Node.js by stripping the pragma directive.
 - **State centralization** — all mutable state in `EphemeraService.qml`. UI reads via bindings, writes via function calls.
 - **Property grouping** — use `// --- Section name ---` comment headers.
 - **Theme** — never hardcode colors/spacing/fonts. Use `Theme` singleton from `qs.Common`.

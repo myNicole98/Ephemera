@@ -24,6 +24,7 @@ Item {
     signal editRequested(string newText)
     property bool _editing: false
     property string _editText: ""
+    property real streamStartTime: 0
 
     readonly property bool isUser: role === "user"
     readonly property real bubbleMaxWidth: isUser ? Math.max(240, Math.floor(width * 0.82)) : width
@@ -600,6 +601,25 @@ Item {
                                 NumberAnimation { to: 1.0; duration: 400; easing.type: Easing.InOutSine }
                                 PauseAnimation { duration: (2 - index) * 160 }
                             }
+                        }
+                    }
+
+                    // Elapsed time counter
+                    StyledText {
+                        visible: root.streamStartTime > 0
+                        text: _elapsedText
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceTextMedium
+                        opacity: 0.7
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        property string _elapsedText: "0.0s"
+
+                        Timer {
+                            running: root.status === "streaming" && root.streamStartTime > 0
+                            interval: 100
+                            repeat: true
+                            onTriggered: parent._elapsedText = ((Date.now() - root.streamStartTime) / 1000).toFixed(1) + "s"
                         }
                     }
                 }

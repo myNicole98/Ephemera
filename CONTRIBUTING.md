@@ -12,19 +12,36 @@ This guide covers everything you need to know to work on Ephemera — a Quickshe
 
 ```
 ephemera/
-├── plugin.json              # Plugin manifest (id, type, capabilities, entry point)
-├── EphemeraDaemon.qml       # Entry point — service init, per-screen panels, IPC handler
-├── EphemeraPanel.qml        # Wayland layer-shell PanelWindow — slide animation, expand/collapse, focus management
-├── EphemeraService.qml      # Core state machine — messages, streaming, variants, Ollama lifecycle, curl
-├── EphemeraChat.qml         # Main UI — header, message area, composer, overlays
-├── EphemeraSettings.qml     # Settings panel — provider, model, parameters, API key status
-├── MessageList.qml          # ListView wrapper with auto-scroll and entry animations
-├── MessageBubble.qml        # Individual message rendering (markdown, variant pagination, copy, regenerate, streaming dots)
-├── Providers.js             # Pure functions — builds provider-specific curl commands (shared extractSystemPrompt helper)
-├── Markdown.js              # Markdown-to-HTML converter with security hardening
-├── CLAUDE.md                # AI assistant context file
-├── CONTRIBUTING.md           # Developer guide
-└── README.md                # User-facing documentation
+├── plugin.json                          # Plugin manifest (id, type, capabilities, entry point)
+├── EphemeraDaemon.qml                   # Entry point — service init, per-screen panels, IPC handler
+├── src/
+│   ├── services/
+│   │   ├── EphemeraService.qml          # Core state machine — messages, streaming, variants, curl
+│   │   └── OllamaManager.qml           # Ollama lifecycle — auto-start, ping, shutdown, model discovery
+│   ├── components/
+│   │   ├── EphemeraPanel.qml            # Wayland layer-shell PanelWindow — slide/expand animations
+│   │   ├── EphemeraChat.qml             # Main UI — header, message area, composer, overlays
+│   │   ├── EphemeraSettings.qml         # Settings shell — delegates to card components below
+│   │   ├── ProviderSettingsCard.qml     # Provider/model selection with URL validation
+│   │   ├── ModelParametersCard.qml      # Temperature, max tokens, system prompt, timeout sliders
+│   │   ├── ApiKeysCard.qml              # API key status from provider registry
+│   │   ├── ChatHistoryCard.qml          # Persistence toggle
+│   │   ├── AccordionSection.qml         # Reusable animated show/hide container
+│   │   ├── SettingsCard.qml             # Reusable themed card with icon and title
+│   │   ├── MessageList.qml              # ListView wrapper with auto-scroll and entry animations
+│   │   └── MessageBubble.qml            # Message rendering (markdown, variants, copy, regenerate, timer)
+│   └── lib/
+│       ├── Providers.js                 # Provider registry + curl command builders + URL validation
+│       ├── Markdown.js                  # Markdown-to-HTML converter with security hardening
+│       ├── StreamParser.js              # SSE stream parsing — parseDelta() per provider format
+│       ├── ChatExport.js                # Chat export to markdown format
+│       ├── VariantStore.js              # Pure-function variant store operations (save, get, evict)
+│       └── ErrorHints.js                # Contextual error hints for HTTP/curl error codes
+├── tests/
+│   └── run_tests.js                     # Unit tests for all JS modules (319 tests)
+├── CLAUDE.md -> AGENTS.md               # AI assistant context file
+├── CONTRIBUTING.md                      # Developer guide
+└── README.md                            # User-facing documentation
 ```
 
 ## Architecture
@@ -32,26 +49,33 @@ ephemera/
 ```
 EphemeraDaemon (entry point)
 │
-├─ EphemeraService (singleton)
+├─ EphemeraService (singleton, src/services/)
 │  ├─ Message ListModel (in-memory by default, optionally persisted)
 │  ├─ messageIndexMap (O(1) message lookups by ID)
-│  ├─ variantStore (side-channel JS map: msgId → [{content, thinking, modelName}])
+│  ├─ VariantStore.js (pure-function variant ops: save, get, evict)
 │  ├─ Stream buffers (_streamContent, _streamThinking, _streamVariantIndex)
 │  ├─ Provider settings (persisted via PluginService)
 │  ├─ Chat persistence (opt-in via persistChat toggle)
-│  ├─ Ollama lifecycle (ping → auto-start → discover models, 15 retries)
+│  ├─ ErrorHints.js (contextual HTTP/curl error messages)
 │  ├─ Curl process (stdin body, SSE streaming, 5MB buffer cap)
-│  └─ Providers.js (curl command builders per provider, shared extractSystemPrompt)
+│  └─ Providers.js (provider registry, curl command builders, URL validation)
+│
+├─ OllamaManager (singleton, src/services/)
+│  └─ Ollama lifecycle (ping → auto-start → discover models, 15 retries)
 │
 └─ Variants (one per screen)
    └─ EphemeraPanel (PanelWindow with slide/expand animations)
       └─ EphemeraChat
-         ├─ MessageList → MessageBubble (uses Markdown.js)
+         ├─ MessageList → MessageBubble (uses Markdown.js, streaming timer)
          ├─ Composer (auto-growing text input)
          └─ EphemeraSettings (overlay)
+            ├─ ProviderSettingsCard
+            ├─ ModelParametersCard
+            ├─ ApiKeysCard
+            └─ ChatHistoryCard
 ```
 
-**Data flow:** User types → `EphemeraChat.sendCurrentMessage()` → `EphemeraService.sendMessage()` → builds payload with sliding context window → `Providers.buildCurlCommand()` → spawns curl via `Process` with body on stdin → `StdioCollector` captures SSE chunks → `handleStreamChunk()` parses `data:` lines → `parseProviderDelta()` extracts text per provider → `updateStreamContent()` appends to `_streamContent` buffer and conditionally updates ListModel (only if the user is viewing the streaming variant) → UI updates live.
+**Data flow:** User types → `EphemeraChat.sendCurrentMessage()` → `EphemeraService.sendMessage()` → builds payload with sliding context window → `Providers.buildCurlCommand()` → spawns curl via `Process` with body on stdin → `StdioCollector` captures SSE chunks → `handleStreamChunk()` parses `data:` lines → `StreamParser.parseDelta()` extracts text per provider → `updateStreamContent()` appends to `_streamContent` buffer and conditionally updates ListModel (only if the user is viewing the streaming variant) → UI updates live.
 
 **Regeneration flow:** User clicks Regenerate → `regenerate()` saves current `{content, thinking, modelName}` into `variantStore[msgId]` → increments `variantCount`, sets new variant's `modelName` to the current model, resets message for streaming → `_launchCurl()` starts new request (no new messages appended) → stream writes to `_streamContent`/`_streamThinking` buffers → on finalize, saved to `variantStore` at `_streamVariantIndex` → user navigates variants via `switchVariant()` which loads content and `modelName` from `variantStore`, so each variant's bubble chip shows the model that generated it.
 
@@ -74,14 +98,24 @@ EphemeraDaemon (entry point)
 
 ## Testing changes
 
-There is no automated test suite — Ephemera is a QML plugin loaded by Quickshell at runtime. Testing is manual.
+### Unit tests
+
+Pure JS modules in `src/lib/` have a Node.js test suite:
+
+```sh
+node tests/run_tests.js
+```
+
+This tests Providers.js, StreamParser.js, Markdown.js, ChatExport.js, VariantStore.js, and ErrorHints.js (319 tests). Run after any change to JS files.
 
 ### Reload cycle
+
+QML components require a full DMS restart for testing — DMS caches compiled QML in-process.
 
 After editing any `.qml` or `.js` file:
 
 ```sh
-# Full restart (required — DMS caches compiled QML in-process)
+# Full restart (required — reload does NOT reliably pick up all changes)
 dms restart
 
 # Wait a few seconds for DMS to initialize, then re-enable
@@ -309,16 +343,18 @@ These are non-negotiable design decisions:
 
 ## Adding a new provider
 
-1. **`Providers.js`** — Add a new `fooRequest(payload, apiKey)` function that returns `{ url, headers, body }`. Use the shared `extractSystemPrompt(payload.messages)` helper to separate system messages if the provider needs them in a different field. Add a case in `buildRequest()`.
+1. **`src/lib/Providers.js`** — Add a registry entry in `_providers` with `displayName`, `envVar`, `defaultUrl`, `modelPlaceholder`, and `buildRequest` function. The request builder returns `{ url, headers, body }`. Use the shared `extractSystemPrompt(payload.messages)` helper to separate system messages if the provider needs them in a different field.
 
-2. **`EphemeraService.qml`** — Add the provider to `resolveApiKey()` (map to env var name) and `updateBaseUrl()` (set default URL). Update `parseProviderDelta()` if the streaming format differs from OpenAI's SSE.
+2. **`src/lib/StreamParser.js`** — If the streaming format differs from OpenAI's SSE, add a case in `parseDelta()`.
 
-3. **`EphemeraSettings.qml`** — Add the provider to the dropdown model and add any provider-specific fields (URL, etc.) with accordion animation.
+3. **`src/services/EphemeraService.qml`** — Add the provider to `resolveApiKey()` (map to env var name) and `updateBaseUrl()` (set default URL).
+
+4. **UI auto-updates** — Settings cards use `Providers.getProviderNames()` and the registry, so the new provider appears automatically in dropdowns, API key status, and model placeholders.
 
 ## Code style
 
 - No automated linter or formatter. Follow existing patterns.
 - Use `Theme.*` for all colors, spacing, and sizing — never hardcode values.
 - Prefer `Behavior on property` for reactive animations.
-- Keep JS logic in `.js` files (Providers.js, Markdown.js); keep QML files focused on UI and state.
+- Keep JS logic in `.pragma library` files under `src/lib/`; keep QML files focused on UI and state.
 - Security-sensitive code should be commented with the rationale.

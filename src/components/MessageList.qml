@@ -10,6 +10,7 @@ Item {
     property string modelName: "Assistant"
     property bool expanded: false
     property bool canRegenerate: false
+    property real streamStartTime: 0
     signal regenerateRequested
     signal variantChangeRequested(string msgId, int newIndex)
     signal editRequested(string msgId, string newText)
@@ -91,6 +92,7 @@ Item {
                 canRegenerate: root.canRegenerate
                 variantIndex: model.variantIndex || 0
                 variantCount: model.variantCount || 1
+                streamStartTime: model.status === "streaming" ? root.streamStartTime : 0
                 onRegenerateRequested: root.regenerateRequested()
                 onVariantChangeRequested: newIndex => root.variantChangeRequested(model.id, newIndex)
                 onEditRequested: newText => root.editRequested(model.id, newText)
