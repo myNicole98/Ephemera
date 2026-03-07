@@ -25,6 +25,8 @@ Item {
     property bool _editing: false
     property string _editText: ""
     property real streamStartTime: 0
+    property int streamTokenCount: 0
+    property string streamStats: ""
 
     readonly property bool isUser: role === "user"
     readonly property real bubbleMaxWidth: isUser ? Math.max(240, Math.floor(width * 0.82)) : width
@@ -161,6 +163,7 @@ Item {
                 Item { Layout.fillWidth: root.isUser }
 
                 Rectangle {
+                    id: chipRect
                     radius: Theme.cornerRadius
                     color: root.isUser ? Theme.withAlpha(Theme.primary, 0.14) : Theme.surfaceVariant
                     Layout.preferredHeight: Theme.fontSizeSmall * 1.6
@@ -182,6 +185,16 @@ Item {
                         wrapMode: Text.NoWrap
                         elide: Text.ElideRight
                         horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    HoverHandler {
+                        id: chipHover
+                    }
+
+                    ToolTip {
+                        visible: chipHover.hovered && headerText.truncated
+                        delay: 500
+                        text: root.modelName
                     }
                 }
 
@@ -604,7 +617,17 @@ Item {
                         }
                     }
 
-                    // Elapsed time counter
+                    // Waiting for first token hint
+                    StyledText {
+                        visible: root.status === "streaming" && root.streamStartTime === 0 && root.text.length === 0 && root.thinking.length === 0
+                        text: "Loading model\u2026"
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceTextMedium
+                        opacity: 0.7
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    // Elapsed time + tokens/sec counter
                     StyledText {
                         visible: root.streamStartTime > 0
                         text: _elapsedText
@@ -619,7 +642,15 @@ Item {
                             running: root.status === "streaming" && root.streamStartTime > 0
                             interval: 100
                             repeat: true
-                            onTriggered: parent._elapsedText = ((Date.now() - root.streamStartTime) / 1000).toFixed(1) + "s"
+                            onTriggered: {
+                                var elapsed = (Date.now() - root.streamStartTime) / 1000;
+                                var label = elapsed.toFixed(1) + "s";
+                                if (root.streamTokenCount > 0 && elapsed > 0.5) {
+                                    var tps = root.streamTokenCount / elapsed;
+                                    label += " · " + tps.toFixed(1) + " tok/s";
+                                }
+                                parent._elapsedText = label;
+                            }
                         }
                     }
                 }
@@ -631,6 +662,48 @@ Item {
                         if (root.thinking.length > 0)
                             root.thinkingExpanded = !root.thinkingExpanded;
                     }
+                }
+            }
+
+            // Persisted stream stats (toggle on click)
+            Item {
+                visible: root.status !== "streaming" && root.streamStats.length > 0 && !root.isUser
+                width: statsRow.implicitWidth
+                height: 22
+
+                property bool _statsVisible: false
+
+                Row {
+                    id: statsRow
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Theme.spacingXS
+
+                    DankIcon {
+                        name: "speed"
+                        size: 14
+                        color: Theme.surfaceTextMedium
+                        opacity: parent.parent._statsVisible ? 0.7 : 0.5
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        Behavior on opacity {
+                            NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
+                        }
+                    }
+
+                    StyledText {
+                        visible: parent.parent._statsVisible
+                        text: root.streamStats
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceTextMedium
+                        opacity: 0.5
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: parent._statsVisible = !parent._statsVisible
                 }
             }
         }

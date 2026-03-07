@@ -74,6 +74,7 @@ Item {
             id: headerRow
             width: parent.width
             spacing: Theme.spacingS
+            clip: true
 
             StyledText {
                 text: "Ephemera"
@@ -97,13 +98,12 @@ Item {
                 border.color: (aiService.missingApiKey || aiService.lastRequestFailed) ? Theme.withAlpha(Theme.error, 0.4) : Theme.withAlpha(Theme.outline, 0)
                 border.width: (aiService.missingApiKey || aiService.lastRequestFailed) ? 1 : 0
                 height: Theme.fontSizeSmall * 1.6
-                Layout.preferredWidth: root.slideoutExpanded ? 320 : 160
                 Layout.alignment: Qt.AlignVCenter
 
-                Behavior on Layout.preferredWidth {
-                    NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
-                }
+                Layout.preferredWidth: root.slideoutExpanded ? 320 : 160
+
                 clip: true
+                HoverHandler { id: pillHoverHandler }
 
                 property bool _flashing: false
 
@@ -119,19 +119,31 @@ Item {
 
                 StyledText {
                     id: providerLabel
-                    anchors.centerIn: parent
-                    width: parent.width - Theme.spacingS * 2
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.spacingS
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - Theme.spacingS - dropdownIcon.width - Theme.spacingS / 2 - 2
                     text: root.displayModel
                     font.pixelSize: Theme.fontSizeSmall
                     color: (aiService.missingApiKey || aiService.lastRequestFailed) ? Theme.error : Theme.surfaceVariantText
                     wrapMode: Text.NoWrap
                     elide: Text.ElideRight
-                    horizontalAlignment: Text.AlignHCenter
+                    horizontalAlignment: Text.AlignLeft
 
                     onTextChanged: {
                         providerPill._flashing = true;
                         providerFlashTimer.start();
                     }
+                }
+
+                DankIcon {
+                    id: dropdownIcon
+                    name: "arrow_drop_down"
+                    size: Theme.fontSizeSmall
+                    color: providerLabel.color
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.spacingS / 2
+                    anchors.verticalCenter: parent.verticalCenter
                 }
 
                 MouseArea {
@@ -140,11 +152,24 @@ Item {
                     onClicked: modelSelectorPopup.open()
                 }
 
+                ToolTip {
+                    visible: pillHoverHandler.hovered && providerLabel.truncated && !modelSelectorPopup.visible
+                    delay: 500
+                    text: root.displayModel
+                }
+
                 Popup {
                     id: modelSelectorPopup
                     y: providerPill.height + Theme.spacingXS
-                    width: Math.max(220, providerPill.width)
+                    property real _hoveredItemWidth: 0
+                    width: Math.min(Math.max(220, providerPill.width, _hoveredItemWidth), headerRow.width - providerPill.x)
                     padding: Theme.spacingS
+                    Behavior on width {
+                        enabled: modelSelectorPopup.visible
+                        NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+                    }
+
+                    onClosed: _hoveredItemWidth = 0
 
                     background: Rectangle {
                         color: Theme.surfaceContainerHighest
@@ -153,9 +178,30 @@ Item {
                         border.width: 1
                     }
 
-                    Column {
-                        width: parent.width
-                        spacing: Theme.spacingXS
+                    contentItem: MouseArea {
+                        id: popupHoverArea
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                        clip: true
+                        implicitWidth: popupColumn.implicitWidth
+                        implicitHeight: popupColumn.implicitHeight
+                        onContainsMouseChanged: {
+                            if (!containsMouse && !quickModelField.activeFocus)
+                                popupHoverCloseTimer.start()
+                            else
+                                popupHoverCloseTimer.stop()
+                        }
+
+                        Timer {
+                            id: popupHoverCloseTimer
+                            interval: 400
+                            onTriggered: if (!popupHoverArea.containsMouse) modelSelectorPopup.close()
+                        }
+
+                        Column {
+                            id: popupColumn
+                            width: modelSelectorPopup.availableWidth
+                            spacing: Theme.spacingXS
 
                         // Model text field for quick entry
                         DankTextField {
@@ -199,6 +245,9 @@ Item {
                                 ItemDelegate {
                                     width: parent.width
                                     height: 32
+                                    padding: 0
+                                    leftPadding: Theme.spacingS
+                                    rightPadding: Theme.spacingS
                                     onClicked: {
                                         aiService.model = model.name;
                                         aiService.saveSettingValue("model", model.name);
@@ -210,6 +259,7 @@ Item {
                                     }
 
                                     contentItem: StyledText {
+                                        id: modelItemLabel
                                         text: model.name
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.family: Theme.monoFontFamily
@@ -217,11 +267,26 @@ Item {
                                         font.weight: model.name === aiService.model ? Font.Medium : Font.Normal
                                         wrapMode: Text.NoWrap
                                         elide: Text.ElideRight
-                                        anchors.verticalCenter: parent.verticalCenter
+                                        anchors.verticalCenter: parent ? parent.verticalCenter : undefined
+                                        width: parent ? parent.width : 0
+                                    }
+
+                                    HoverHandler {
+                                        id: itemHover
+                                        onHoveredChanged: {
+                                            if (hovered && modelItemLabel.truncated) {
+                                                var needed = modelItemLabel.implicitWidth + Theme.spacingS * 4 + modelSelectorPopup.padding * 2
+                                                modelSelectorPopup._hoveredItemWidth = Math.min(
+                                                    Math.max(modelSelectorPopup._hoveredItemWidth, needed),
+                                                    headerRow.width - providerPill.x
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
+                    }
                     }
                 }
             }
@@ -428,6 +493,7 @@ Item {
                 expanded: root.slideoutExpanded
                 canRegenerate: !aiService.isStreaming && aiService.lastUserText.length > 0
                 streamStartTime: aiService.streamStartTime
+                streamTokenCount: aiService.streamTokenCount
                 onRegenerateRequested: aiService.regenerate()
                 onVariantChangeRequested: (msgId, newIndex) => aiService.switchVariant(msgId, newIndex)
                 onEditRequested: (msgId, newText) => aiService.editAndRegenerate(msgId, newText)
@@ -479,6 +545,51 @@ Item {
                         font.family: Theme.fontFamily
                         color: Theme.surfaceTextMedium
                         wrapMode: Text.Wrap
+                    }
+                }
+            }
+
+            // Ollama starting banner
+            Rectangle {
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Theme.spacingM
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: ollamaBannerRow.implicitWidth + Theme.spacingM * 2
+                height: 32
+                radius: 16
+                color: Theme.withAlpha(Theme.primary, 0.10)
+                border.color: Theme.withAlpha(Theme.primary, 0.25)
+                border.width: 1
+                visible: opacity > 0
+                opacity: aiService.isOllama && !aiService.ollamaReady && (aiService.ollamaStartPending || aiService.ollamaRetries > 0) ? 1.0 : 0.0
+                z: 10
+
+                Behavior on opacity {
+                    NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
+                }
+
+                Row {
+                    id: ollamaBannerRow
+                    anchors.centerIn: parent
+                    spacing: Theme.spacingS
+
+                    DankIcon {
+                        name: "pending"
+                        size: 16
+                        color: Theme.primary
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        SequentialAnimation on rotation {
+                            loops: Animation.Infinite
+                            NumberAnimation { from: 0; to: 360; duration: 1500; easing.type: Easing.Linear }
+                        }
+                    }
+
+                    StyledText {
+                        text: "Starting Ollama\u2026"
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.primary
+                        anchors.verticalCenter: parent.verticalCenter
                     }
                 }
             }

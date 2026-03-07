@@ -20,9 +20,11 @@ Item {
     property int _ollamaPid: -1
     property int ollamaIdleMinutes: 5
     property string discoveryError: ""
+    property string gpuLabel: ""
 
     signal modelDiscovered(string name)
     signal modelAutoSelected(string name)
+    signal gpuStatusReady(string label)
 
     function ensureReady() {
         _shuttingDown = false;
@@ -78,6 +80,15 @@ Item {
         modelDiscovery.command = ["curl", "-s", "--connect-timeout", "2", ollamaUrl + "/api/tags"];
         modelDiscovery.running = true;
     }
+
+    function queryGpuStatus(modelName) {
+        if (!ollamaReady || !modelName) return;
+        _gpuQueryModel = modelName;
+        gpuQuery.command = ["curl", "-s", "--connect-timeout", "2", ollamaUrl + "/api/ps"];
+        gpuQuery.running = true;
+    }
+
+    property string _gpuQueryModel: ""
 
     function cleanupOnDestruction() {
         if (ollamaWeStarted && !_shuttingDown) {
@@ -198,6 +209,40 @@ Item {
                 } catch (e) {
                     console.warn("Ephemera: model discovery parse error:", e);
                     root.discoveryError = "Failed to parse model list from Ollama.";
+                }
+            }
+        }
+    }
+
+    Process {
+        id: gpuQuery
+        running: false
+        stdout: StdioCollector {
+            onStreamFinished: {
+                try {
+                    var data = JSON.parse(text);
+                    var models = data.models || [];
+                    for (var i = 0; i < models.length; i++) {
+                        var m = models[i];
+                        if (m.name !== root._gpuQueryModel && m.model !== root._gpuQueryModel)
+                            continue;
+                        var total = m.size || 0;
+                        var vram = m.size_vram || 0;
+                        if (total <= 0) break;
+                        var families = (m.details && m.details.families) || [];
+                        var isMoE = families.some(function(f) { return f.toLowerCase().indexOf("moe") !== -1; });
+                        var pct = Math.round(vram / total * 100);
+                        if (pct >= 100 || (isMoE && pct > 0))
+                            root.gpuLabel = "GPU";
+                        else if (pct > 0)
+                            root.gpuLabel = pct + "% GPU";
+                        else
+                            root.gpuLabel = "CPU";
+                        root.gpuStatusReady(root.gpuLabel);
+                        return;
+                    }
+                } catch (e) {
+                    console.warn("Ephemera: GPU status query parse error:", e);
                 }
             }
         }

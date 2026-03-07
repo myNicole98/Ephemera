@@ -49,6 +49,8 @@ Item {
     property alias ollamaReady: ollamaManager.ollamaReady
     property alias discoveryError: ollamaManager.discoveryError
     property alias ollamaIdleMinutes: ollamaManager.ollamaIdleMinutes
+    property alias ollamaRetries: ollamaManager.ollamaRetries
+    readonly property int ollamaMaxRetries: ollamaManager.ollamaMaxRetries
 
     // Per-provider temperature range
     readonly property var temperatureRange: Providers.getTemperatureRange(provider)
@@ -83,6 +85,17 @@ Item {
             if (!root.model || root.model.length === 0) {
                 root.model = name;
                 root.saveSettingValue("model", name);
+            }
+        }
+
+        onGpuStatusReady: label => {
+            if (!root._lastFinalizedStreamId) return;
+            var idx = root.findIndexById(root._lastFinalizedStreamId);
+            if (idx >= 0) {
+                var msg = root.messagesModel.get(idx);
+                var stats = msg.streamStats || "";
+                if (stats && label && stats.indexOf("GPU") === -1 && stats.indexOf("CPU") === -1)
+                    root.messagesModel.setProperty(idx, "streamStats", stats + " · " + label);
             }
         }
     }
@@ -232,7 +245,7 @@ Item {
                     role: m.role, content: m.content, thinking: m.thinking || "",
                     id: m.id, timestamp: m.timestamp, status: status,
                     variantIndex: m.variantIndex || 0, variantCount: m.variantCount || 1,
-                    modelName: m.modelName || ""
+                    modelName: m.modelName || "", streamStats: ""
                 });
                 messageIndexMap[m.id] = messagesModel.count - 1;
                 if (m.role === "user") lastUserText = m.content;
@@ -279,7 +292,8 @@ Item {
 
         activeStreamId = msgId;
         isStreaming = true;
-        streamStartTime = Date.now();
+        streamStartTime = 0;
+        streamTokenCount = 0;
         lastHttpStatus = 0;
         lastRequestFailed = false;
         _streamContent = "";
@@ -369,11 +383,12 @@ Item {
 
         var now = Date.now();
         var streamId = "assistant-" + now;
-        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1, modelName: model });
+        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1, modelName: model, streamStats: "" });
         messageIndexMap[streamId] = messagesModel.count - 1;
         activeStreamId = streamId;
         isStreaming = true;
-        streamStartTime = Date.now();
+        streamStartTime = 0;
+        streamTokenCount = 0;
         lastHttpStatus = 0;
         _streamContent = "";
         _streamThinking = "";
@@ -435,11 +450,13 @@ Item {
     property string streamBuffer: ""
     property string pendingStdinBody: ""
     property real streamStartTime: 0
+    property int streamTokenCount: 0
     property bool _insideThinkTag: false
     property string _tagBuffer: ""
     property string _streamContent: ""
     property string _streamThinking: ""
     property int _streamVariantIndex: 0
+    property string _lastFinalizedStreamId: ""
 
     function cancel() {
         if (!isStreaming) return;
@@ -456,15 +473,16 @@ Item {
         var streamId = "assistant-" + now;
 
         var userId = "user-" + now;
-        messagesModel.append({ role: "user", content: text, thinking: "", timestamp: now, id: userId, status: "ok", variantIndex: 0, variantCount: 1, modelName: "" });
+        messagesModel.append({ role: "user", content: text, thinking: "", timestamp: now, id: userId, status: "ok", variantIndex: 0, variantCount: 1, modelName: "", streamStats: "" });
         messageIndexMap[userId] = messagesModel.count - 1;
         lastUserText = text;
 
-        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now + 1, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1, modelName: model });
+        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now + 1, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1, modelName: model, streamStats: "" });
         messageIndexMap[streamId] = messagesModel.count - 1;
         activeStreamId = streamId;
         isStreaming = true;
-        streamStartTime = Date.now();
+        streamStartTime = 0;
+        streamTokenCount = 0;
         lastHttpStatus = 0;
         _streamContent = "";
         _streamThinking = "";
@@ -562,9 +580,12 @@ Item {
                 var jsonPart = line.substring(5).trim();
                 var delta = StreamParser.parseDelta(jsonPart, provider);
 
-                if (delta.thinking)
+                if (delta.thinking) {
+                    streamTokenCount++;
                     updateStreamThinking(activeStreamId, delta.thinking);
+                }
                 if (delta.content) {
+                    streamTokenCount++;
                     // For OpenAI/Ollama, route through think-tag detection
                     if (provider !== "anthropic" && provider !== "gemini") {
                         var tagResult = StreamParser.routeThinkTags(delta.content, _tagBuffer, _insideThinkTag);
@@ -681,6 +702,7 @@ Item {
                 messagesModel.setProperty(idx, "content", _streamContent);
                 messagesModel.setProperty(idx, "thinking", _streamThinking);
             }
+            messagesModel.setProperty(idx, "streamStats", _buildStreamStats());
             messagesModel.setProperty(idx, "status", "ok");
         }
         isStreaming = false;
@@ -690,6 +712,7 @@ Item {
 
     function updateStreamContent(streamId, deltaText) {
         if (!deltaText) return;
+        if (streamStartTime === 0) streamStartTime = Date.now();
         _streamContent += deltaText;
         var idx = findIndexById(streamId);
         if (idx >= 0) {
@@ -702,6 +725,7 @@ Item {
 
     function updateStreamThinking(streamId, deltaText) {
         if (!deltaText) return;
+        if (streamStartTime === 0) streamStartTime = Date.now();
         _streamThinking += deltaText;
         var idx = findIndexById(streamId);
         if (idx >= 0) {
@@ -744,11 +768,25 @@ Item {
                 messagesModel.setProperty(idx, "content", _streamContent);
                 messagesModel.setProperty(idx, "thinking", _streamThinking);
             }
+            messagesModel.setProperty(idx, "streamStats", _buildStreamStats());
             messagesModel.setProperty(idx, "status", "ok");
         }
+        _lastFinalizedStreamId = streamId;
         isStreaming = false;
         activeStreamId = "";
+        if (isOllama) ollamaManager.queryGpuStatus(model);
         saveChatHistory();
+    }
+
+    function _buildStreamStats() {
+        if (streamStartTime === 0) return "";
+        var elapsed = (Date.now() - streamStartTime) / 1000;
+        var label = elapsed.toFixed(1) + "s";
+        if (streamTokenCount > 0 && elapsed > 0.5) {
+            var tps = streamTokenCount / elapsed;
+            label += " · " + tps.toFixed(1) + " tok/s";
+        }
+        return label;
     }
 
     // ─── Curl process ──────────────────────────────────────────────

@@ -11,6 +11,7 @@ Item {
     property bool expanded: false
     property bool canRegenerate: false
     property real streamStartTime: 0
+    property int streamTokenCount: 0
     signal regenerateRequested
     signal variantChangeRequested(string msgId, int newIndex)
     signal editRequested(string msgId, string newText)
@@ -93,6 +94,8 @@ Item {
                 variantIndex: model.variantIndex || 0
                 variantCount: model.variantCount || 1
                 streamStartTime: model.status === "streaming" ? root.streamStartTime : 0
+                streamTokenCount: model.status === "streaming" ? root.streamTokenCount : 0
+                streamStats: model.streamStats || ""
                 onRegenerateRequested: root.regenerateRequested()
                 onVariantChangeRequested: newIndex => root.variantChangeRequested(model.id, newIndex)
                 onEditRequested: newText => root.editRequested(model.id, newText)
