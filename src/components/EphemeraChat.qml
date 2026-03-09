@@ -6,7 +6,6 @@ import Quickshell
 import qs.Common
 import qs.Services
 import qs.Widgets
-import "../lib/Providers.js" as Providers
 
 Item {
     id: root
@@ -20,14 +19,14 @@ Item {
     signal expandToggled
 
     function focusInput() {
-        composer.forceActiveFocus();
+        composerArea.forceActiveFocus();
     }
 
     Connections {
         target: aiService
         function onIsStreamingChanged() {
             if (!aiService.isStreaming && root.visible)
-                composer.forceActiveFocus();
+                composerArea.forceActiveFocus();
         }
     }
 
@@ -38,7 +37,7 @@ Item {
             if (aiService) aiService.scheduleIdleShutdown();
         } else {
             if (aiService) aiService.ensureOllamaReady();
-            Qt.callLater(function() { composer.forceActiveFocus(); });
+            Qt.callLater(function() { composerArea.forceActiveFocus(); });
         }
     }
 
@@ -51,10 +50,10 @@ Item {
     }
 
     function sendCurrentMessage() {
-        if (!composer.text || composer.text.trim().length === 0) return;
+        if (!composerArea.text || composerArea.text.trim().length === 0) return;
         if (!aiService) return;
-        aiService.sendMessage(composer.text.trim());
-        composer.text = "";
+        aiService.sendMessage(composerArea.text.trim());
+        composerArea.text = "";
     }
 
     function closeSettings() {
@@ -65,421 +64,53 @@ Item {
         settingsCloseTimer.start();
     }
 
+    function _handleClearRequest() {
+        if (!aiService.isStreaming && (aiService.messageCount || 0) > 0)
+            clearConfirmDialog.open();
+        else if (!aiService.isStreaming)
+            composerArea.text = "";
+        composerArea.forceActiveFocus();
+    }
+
     Column {
         anchors.fill: parent
         spacing: Theme.spacingM
 
         // -- Header --
-        RowLayout {
-            id: headerRow
+        ChatHeader {
+            id: header
             width: parent.width
-            spacing: Theme.spacingS
-            clip: true
-
-            StyledText {
-                text: "Ephemera"
-                font.pixelSize: Theme.fontSizeLarge
-                font.weight: Font.Medium
-                color: Theme.surfaceText
-                Layout.alignment: Qt.AlignVCenter
+            aiService: root.aiService
+            slideoutExpanded: root.slideoutExpanded
+            slideoutExpandable: root.slideoutExpandable
+            showSettings: root.showSettings
+            displayModel: root.displayModel
+            onSettingsToggled: {
+                if (root.showSettings) root.closeSettings();
+                else root.showSettings = true;
             }
-
-            // Provider pill with fixed max width and truncation
-            Rectangle {
-                id: providerPill
-                radius: Theme.cornerRadius
-                color: {
-                    if (aiService.missingApiKey || aiService.lastRequestFailed)
-                        return Theme.withAlpha(Theme.error, 0.15);
-                    if (_flashing)
-                        return Theme.withAlpha(Theme.primary, 0.3);
-                    return Theme.surfaceVariant;
-                }
-                border.color: (aiService.missingApiKey || aiService.lastRequestFailed) ? Theme.withAlpha(Theme.error, 0.4) : Theme.withAlpha(Theme.outline, 0)
-                border.width: (aiService.missingApiKey || aiService.lastRequestFailed) ? 1 : 0
-                height: Theme.fontSizeSmall * 1.6
-                Layout.alignment: Qt.AlignVCenter
-
-                Layout.preferredWidth: root.slideoutExpanded ? 320 : 160
-
-                clip: true
-                HoverHandler { id: pillHoverHandler }
-
-                property bool _flashing: false
-
-                Behavior on color {
-                    ColorAnimation { duration: 200; easing.type: Easing.OutCubic }
-                }
-
-                Timer {
-                    id: providerFlashTimer
-                    interval: 150
-                    onTriggered: providerPill._flashing = false
-                }
-
-                StyledText {
-                    id: providerLabel
-                    anchors.left: parent.left
-                    anchors.leftMargin: Theme.spacingS
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - Theme.spacingS - dropdownIcon.width - Theme.spacingS / 2 - 2
-                    text: root.displayModel
-                    font.pixelSize: Theme.fontSizeSmall
-                    color: (aiService.missingApiKey || aiService.lastRequestFailed) ? Theme.error : Theme.surfaceVariantText
-                    wrapMode: Text.NoWrap
-                    elide: Text.ElideRight
-                    horizontalAlignment: Text.AlignLeft
-
-                    onTextChanged: {
-                        providerPill._flashing = true;
-                        providerFlashTimer.start();
-                    }
-                }
-
-                DankIcon {
-                    id: dropdownIcon
-                    name: "arrow_drop_down"
-                    size: Theme.fontSizeSmall
-                    color: providerLabel.color
-                    anchors.right: parent.right
-                    anchors.rightMargin: Theme.spacingS / 2
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: modelSelectorPopup.open()
-                }
-
-                ToolTip {
-                    visible: pillHoverHandler.hovered && providerLabel.truncated && !modelSelectorPopup.visible
-                    delay: 500
-                    text: root.displayModel
-                }
-
-                Popup {
-                    id: modelSelectorPopup
-                    y: providerPill.height + Theme.spacingXS
-                    property real _hoveredItemWidth: 0
-                    width: Math.min(Math.max(220, providerPill.width, _hoveredItemWidth), headerRow.width - providerPill.x)
-                    padding: Theme.spacingS
-                    Behavior on width {
-                        enabled: modelSelectorPopup.visible
-                        NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
-                    }
-
-                    onClosed: _hoveredItemWidth = 0
-
-                    background: Rectangle {
-                        color: Theme.surfaceContainerHighest
-                        radius: Theme.cornerRadius
-                        border.color: Theme.outline
-                        border.width: 1
-                    }
-
-                    contentItem: MouseArea {
-                        id: popupHoverArea
-                        hoverEnabled: true
-                        acceptedButtons: Qt.NoButton
-                        clip: true
-                        implicitWidth: popupColumn.implicitWidth
-                        implicitHeight: popupColumn.implicitHeight
-                        onContainsMouseChanged: {
-                            if (!containsMouse && !quickModelField.activeFocus)
-                                popupHoverCloseTimer.start()
-                            else
-                                popupHoverCloseTimer.stop()
-                        }
-
-                        Timer {
-                            id: popupHoverCloseTimer
-                            interval: 400
-                            onTriggered: if (!popupHoverArea.containsMouse) modelSelectorPopup.close()
-                        }
-
-                        Column {
-                            id: popupColumn
-                            width: modelSelectorPopup.availableWidth
-                            spacing: Theme.spacingXS
-
-                        // Model text field for quick entry
-                        DankTextField {
-                            id: quickModelField
-                            width: parent.width
-                            text: aiService.model
-                            placeholderText: {
-                                var info = Providers.getProviderInfo(aiService.provider);
-                                return info.modelPlaceholder || "model-name";
-                            }
-                            onEditingFinished: {
-                                aiService.model = text.trim();
-                                aiService.saveSettingValue("model", text.trim());
-                            }
-                            Keys.onReturnPressed: {
-                                editingFinished();
-                                modelSelectorPopup.close();
-                            }
-
-                            Component.onCompleted: {
-                                quickModelField.forceActiveFocus();
-                                quickModelField.selectAll();
-                            }
-                        }
-
-                        // Ollama model list (only shown when Ollama has discovered models)
-                        Column {
-                            width: parent.width
-                            spacing: 0
-                            visible: aiService.provider === "ollama" && aiService.availableModels.count > 0
-
-                            Rectangle {
-                                width: parent.width
-                                height: 1
-                                color: Theme.withAlpha(Theme.outline, 0.15)
-                            }
-
-                            Repeater {
-                                model: aiService.availableModels
-
-                                ItemDelegate {
-                                    width: parent.width
-                                    height: 32
-                                    padding: 0
-                                    leftPadding: Theme.spacingS
-                                    rightPadding: Theme.spacingS
-                                    onClicked: {
-                                        aiService.model = model.name;
-                                        aiService.saveSettingValue("model", model.name);
-                                        modelSelectorPopup.close();
-                                    }
-                                    background: Rectangle {
-                                        color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : Theme.withAlpha(Theme.primary, 0)
-                                        radius: Theme.cornerRadius
-                                    }
-
-                                    contentItem: StyledText {
-                                        id: modelItemLabel
-                                        text: model.name
-                                        font.pixelSize: Theme.fontSizeSmall
-                                        font.family: Theme.monoFontFamily
-                                        color: model.name === aiService.model ? Theme.primary : Theme.surfaceText
-                                        font.weight: model.name === aiService.model ? Font.Medium : Font.Normal
-                                        wrapMode: Text.NoWrap
-                                        elide: Text.ElideRight
-                                        anchors.verticalCenter: parent ? parent.verticalCenter : undefined
-                                        width: parent ? parent.width : 0
-                                    }
-
-                                    HoverHandler {
-                                        id: itemHover
-                                        onHoveredChanged: {
-                                            if (hovered && modelItemLabel.truncated) {
-                                                var needed = modelItemLabel.implicitWidth + Theme.spacingS * 4 + modelSelectorPopup.padding * 2
-                                                modelSelectorPopup._hoveredItemWidth = Math.min(
-                                                    Math.max(modelSelectorPopup._hoveredItemWidth, needed),
-                                                    headerRow.width - providerPill.x
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    }
-                }
+            onExportRequested: {
+                aiService.exportConversation();
+                chatToast.show("Conversation copied to clipboard");
             }
-
-            Item { Layout.fillWidth: true }
-
-            DankActionButton {
-                iconName: "tune"
-                tooltipText: showSettings ? "Hide settings" : "Settings"
-                onClicked: {
-                    if (showSettings) closeSettings();
-                    else showSettings = true;
-                }
+            onExportFileRequested: {
+                var file = aiService.exportConversationToFile();
+                chatToast.show("Saved to " + file.split("/").pop());
             }
-
-            DankActionButton {
-                iconName: "content_copy"
-                tooltipText: "Copy conversation"
-                visible: root.slideoutExpanded
-                enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                onClicked: {
-                    aiService.exportConversation();
-                    showToast("Conversation copied to clipboard");
-                }
+            onClearRequested: {
+                aiService.clearChat();
+                composerArea.text = "";
+                composerArea.forceActiveFocus();
             }
-
-            DankActionButton {
-                iconName: "save_as"
-                tooltipText: "Save conversation as .md"
-                visible: root.slideoutExpanded
-                enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                onClicked: {
-                    var file = aiService.exportConversationToFile();
-                    showToast("Saved to " + file.split("/").pop());
-                }
-            }
-
-            DankActionButton {
-                iconName: "delete_sweep"
-                tooltipText: "Clear chat"
-                visible: root.slideoutExpanded
-                enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                onClicked: { aiService.clearChat(); composer.text = ""; composer.forceActiveFocus(); }
-            }
-
-            DankActionButton {
-                id: overflowBtn
-                iconName: "more_vert"
-                tooltipText: "More actions"
-                visible: !root.slideoutExpanded
-                onClicked: overflowMenu.open()
-
-                Popup {
-                    id: overflowMenu
-                    x: overflowBtn.width - width
-                    y: overflowBtn.height + Theme.spacingXS
-                    width: 200
-                    padding: Theme.spacingXS
-
-                    background: Rectangle {
-                        color: Theme.surfaceContainerHighest
-                        radius: Theme.cornerRadius
-                        border.color: Theme.outline
-                        border.width: 1
-                    }
-
-                    Column {
-                        width: parent.width
-                        spacing: 0
-
-                        ItemDelegate {
-                            width: parent.width
-                            height: 36
-                            enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                            onClicked: { aiService.exportConversation(); showToast("Conversation copied to clipboard"); overflowMenu.close(); }
-                            background: Rectangle {
-                                color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : Theme.withAlpha(Theme.primary, 0)
-                                radius: Theme.cornerRadius
-                            }
-
-                            contentItem: Row {
-                                spacing: Theme.spacingS
-                                anchors.verticalCenter: parent.verticalCenter
-
-                                DankIcon {
-                                    name: "content_copy"
-                                    size: 16
-                                    color: parent.parent.enabled ? Theme.surfaceText : Theme.surfaceTextMedium
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-
-                                StyledText {
-                                    text: "Copy conversation"
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    color: parent.parent.enabled ? Theme.surfaceText : Theme.surfaceTextMedium
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                            }
-                        }
-
-                        ItemDelegate {
-                            width: parent.width
-                            height: 36
-                            enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                            onClicked: { var f = aiService.exportConversationToFile(); showToast("Saved to " + f.split("/").pop()); overflowMenu.close(); }
-                            background: Rectangle {
-                                color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : Theme.withAlpha(Theme.primary, 0)
-                                radius: Theme.cornerRadius
-                            }
-
-                            contentItem: Row {
-                                spacing: Theme.spacingS
-                                anchors.verticalCenter: parent.verticalCenter
-
-                                DankIcon {
-                                    name: "save_as"
-                                    size: 16
-                                    color: parent.parent.enabled ? Theme.surfaceText : Theme.surfaceTextMedium
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-
-                                StyledText {
-                                    text: "Save as .md"
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    color: parent.parent.enabled ? Theme.surfaceText : Theme.surfaceTextMedium
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                            }
-                        }
-
-                        ItemDelegate {
-                            width: parent.width
-                            height: 36
-                            enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
-                            onClicked: { overflowMenu.close(); aiService.clearChat(); composer.text = ""; composer.forceActiveFocus(); }
-                            background: Rectangle {
-                                color: parent.hovered ? Theme.withAlpha(Theme.primary, 0.12) : Theme.withAlpha(Theme.primary, 0)
-                                radius: Theme.cornerRadius
-                            }
-
-                            contentItem: Row {
-                                spacing: Theme.spacingS
-                                anchors.verticalCenter: parent.verticalCenter
-
-                                DankIcon {
-                                    name: "delete_sweep"
-                                    size: 16
-                                    color: parent.parent.enabled ? Theme.surfaceText : Theme.surfaceTextMedium
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-
-                                StyledText {
-                                    text: "Clear chat"
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    color: parent.parent.enabled ? Theme.surfaceText : Theme.surfaceTextMedium
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            DankActionButton {
-                id: expandBtn
-                iconName: root.slideoutExpanded ? "unfold_less" : "unfold_more"
-                iconSize: Theme.iconSize - 4
-                iconColor: Theme.surfaceText
-                visible: root.slideoutExpandable
-                tooltipText: root.slideoutExpanded ? "Collapse" : "Expand"
-                onClicked: root.expandToggled()
-
-                transform: Rotation {
-                    angle: 90
-                    origin.x: expandBtn.width / 2
-                    origin.y: expandBtn.height / 2
-                }
-            }
-
-            DankActionButton {
-                iconName: "close"
-                iconSize: Theme.iconSize - 4
-                iconColor: Theme.surfaceText
-                tooltipText: "Close"
-                onClicked: root.hideRequested()
-            }
+            onExpandToggled: root.expandToggled()
+            onHideRequested: root.hideRequested()
         }
 
         // -- Message area --
         Rectangle {
             id: messageArea
             width: parent.width
-            height: parent.height - headerRow.height - composerRow.height - Theme.spacingM * 3
+            height: parent.height - header.height - composerArea.height - Theme.spacingM * 3
             radius: Theme.cornerRadius
             color: Qt.rgba(Theme.surfaceContainer.r, Theme.surfaceContainer.g, Theme.surfaceContainer.b, SettingsData.popupTransparency)
             border.color: Theme.surfaceVariantAlpha
@@ -610,7 +241,6 @@ Item {
                     NumberAnimation { duration: 300; easing.type: Easing.OutCubic }
                 }
 
-                // Breathing vapor icon
                 DankIcon {
                     id: vaporIcon
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -709,202 +339,24 @@ Item {
         }
 
         // -- Composer --
-        Row {
-            id: composerRow
-            width: parent.width
-            height: composerContainer.height
-            spacing: Theme.spacingM
-
-            Rectangle {
-                id: composerContainer
-                width: parent.width - actionButtonArea.width - Theme.spacingM
-                height: Math.max(44, Math.min(160, composer.contentHeight + Theme.spacingM * 2))
-                radius: Theme.cornerRadius
-                color: Theme.withAlpha(Theme.surfaceContainerHigh, Theme.popupTransparency)
-                border.color: composer.activeFocus ? Theme.primary : Theme.outlineMedium
-                border.width: composer.activeFocus ? 2 : 1
-
-                Behavior on height {
-                    NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
-                }
-
-                Behavior on border.color {
-                    ColorAnimation {
-                        duration: Theme.shortDuration
-                        easing.type: Theme.standardEasing
-                    }
-                }
-
-                Behavior on border.width {
-                    NumberAnimation {
-                        duration: Theme.shortDuration
-                        easing.type: Theme.standardEasing
-                    }
-                }
-
-                ScrollView {
-                    id: scrollView
-                    anchors.fill: parent
-                    anchors.margins: Theme.spacingM
-                    clip: true
-                    padding: 0
-                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-
-                    TextArea {
-                        id: composer
-                        implicitWidth: scrollView.availableWidth
-                        wrapMode: TextArea.Wrap
-                        background: Rectangle { color: Theme.withAlpha(Theme.surfaceContainer, 0) }
-                        font.pixelSize: Theme.fontSizeMedium
-                        font.family: Theme.fontFamily
-                        font.weight: Theme.fontWeight
-                        color: Theme.surfaceText
-                        Material.accent: Theme.primary
-                        padding: 0
-                        leftPadding: 0
-                        rightPadding: 0
-                        topPadding: 0
-                        bottomPadding: 0
-
-                        Keys.onPressed: event => {
-                            if (event.key === Qt.Key_Escape) {
-                                hideRequested();
-                                event.accepted = true;
-                            } else if (event.key === Qt.Key_Return && !(event.modifiers & Qt.ShiftModifier)) {
-                                sendCurrentMessage();
-                                event.accepted = true;
-                            } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_Return) {
-                                sendCurrentMessage();
-                                event.accepted = true;
-                            } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_L) {
-                                if (!aiService.isStreaming && (aiService.messageCount || 0) > 0)
-                                    clearConfirmDialog.open();
-                                composer.forceActiveFocus();
-                                event.accepted = true;
-                            } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_N) {
-                                if (!aiService.isStreaming && (aiService.messageCount || 0) > 0)
-                                    clearConfirmDialog.open();
-                                else if (!aiService.isStreaming)
-                                    composer.text = "";
-                                composer.forceActiveFocus();
-                                event.accepted = true;
-                            } else if ((event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) === (Qt.ControlModifier | Qt.ShiftModifier) && event.key === Qt.Key_S) {
-                                if (showSettings) closeSettings();
-                                else showSettings = true;
-                                event.accepted = true;
-                            } else if (event.key === Qt.Key_Up && composer.text.length === 0 && aiService.lastUserText.length > 0) {
-                                composer.text = aiService.lastUserText;
-                                composer.cursorPosition = composer.text.length;
-                                event.accepted = true;
-                            }
-                        }
-                    }
-                }
-
-                StyledText {
-                    anchors.fill: parent
-                    anchors.margins: Theme.spacingM
-                    text: aiService.missingApiKey
-                        ? (aiService._keyringAvailable ? "API key required \u2014 set in Settings" : "API key required \u2014 set env var")
-                        : "Ask something\u2026  (Shift+Enter for newline)"
-                    font.pixelSize: Theme.fontSizeMedium
-                    color: aiService.missingApiKey ? Theme.error : Theme.outlineButton
-                    verticalAlignment: Text.AlignTop
-                    visible: composer.text.length === 0
-                    wrapMode: Text.Wrap
-                }
-            }
-
-            // Compact send/stop crossfade area
-            Item {
-                id: actionButtonArea
-                width: 44
-                height: composerContainer.height
-
-                // Send button
-                DankActionButton {
-                    id: sendBtn
-                    anchors.centerIn: parent
-                    iconName: "send"
-                    buttonSize: 40
-                    iconSize: 20
-                    backgroundColor: Theme.primary
-                    iconColor: Theme.onPrimary
-                    tooltipText: "Send"
-                    enabled: composer.text && composer.text.trim().length > 0 && !aiService.isStreaming && !aiService.missingApiKey
-                    opacity: aiService.isStreaming ? 0.0 : 1.0
-                    scale: aiService.isStreaming ? 0.6 : 1.0
-                    visible: opacity > 0
-                    onClicked: sendCurrentMessage()
-
-                    Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-                    Behavior on scale { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-                }
-
-                // Stop button
-                DankActionButton {
-                    id: stopBtn
-                    anchors.centerIn: parent
-                    iconName: "stop"
-                    buttonSize: 40
-                    iconSize: 20
-                    backgroundColor: Theme.error
-                    iconColor: Theme.onPrimary
-                    tooltipText: "Stop"
-                    enabled: aiService.isStreaming
-                    opacity: aiService.isStreaming ? 1.0 : 0.0
-                    scale: aiService.isStreaming ? 1.0 : 0.6
-                    visible: opacity > 0
-                    onClicked: aiService.cancel()
-
-                    Behavior on opacity { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-                    Behavior on scale { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-                }
+        ChatComposer {
+            id: composerArea
+            aiService: root.aiService
+            onSendRequested: root.sendCurrentMessage()
+            onHideRequested: root.hideRequested()
+            onClearRequested: root._handleClearRequest()
+            onSettingsToggled: {
+                if (root.showSettings) root.closeSettings();
+                else root.showSettings = true;
             }
         }
     }
 
     // -- Toast notification --
-    property string _toastMessage: ""
-
-    Rectangle {
-        id: toast
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: composerRow.height + Theme.spacingL
-        width: toastText.implicitWidth + Theme.spacingL * 2
-        height: 36
-        radius: 18
-        color: Theme.withAlpha(Theme.surfaceContainerHighest, 0.95)
-        border.color: Theme.outline
-        border.width: 1
-        visible: opacity > 0
-        opacity: 0
-        z: 100
-
-        Behavior on opacity {
-            NumberAnimation { duration: 200; easing.type: Easing.OutCubic }
-        }
-
-        StyledText {
-            id: toastText
-            anchors.centerIn: parent
-            text: root._toastMessage
-            font.pixelSize: Theme.fontSizeSmall
-            color: Theme.surfaceText
-        }
-
-        Timer {
-            id: toastTimer
-            interval: 2000
-            onTriggered: toast.opacity = 0
-        }
-    }
-
-    function showToast(message) {
-        _toastMessage = message;
-        toast.opacity = 1;
-        toastTimer.restart();
+    ChatToast {
+        id: chatToast
+        anchors.fill: parent
+        bottomMargin: composerArea.height + Theme.spacingL
     }
 
     // -- Settings overlay with fade in/out --
@@ -962,79 +414,12 @@ Item {
     }
 
     // -- Clear chat confirmation dialog --
-    Popup {
+    ClearChatDialog {
         id: clearConfirmDialog
-        anchors.centerIn: parent
-        width: Math.min(320, root.width - Theme.spacingL * 2)
-        padding: Theme.spacingL
-        modal: true
-        dim: false
-        onOpened: clearConfirmBtn.forceActiveFocus()
-
-        background: Rectangle {
-            color: Theme.surfaceContainerHighest
-            radius: Theme.cornerRadius * 2
-            border.color: Theme.outline
-            border.width: 1
-        }
-
-        Column {
-            width: parent.width
-            spacing: Theme.spacingM
-
-            Row {
-                spacing: Theme.spacingS
-
-                DankIcon {
-                    name: "warning"
-                    size: 22
-                    color: Theme.error
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-
-                StyledText {
-                    text: "Clear conversation?"
-                    font.pixelSize: Theme.fontSizeLarge
-                    font.weight: Font.Medium
-                    color: Theme.surfaceText
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-
-            StyledText {
-                width: parent.width
-                text: "This will permanently delete all messages in this chat."
-                font.pixelSize: Theme.fontSizeMedium
-                color: Theme.surfaceTextMedium
-                wrapMode: Text.Wrap
-            }
-
-            Row {
-                anchors.right: parent.right
-                spacing: Theme.spacingS
-
-                DankButton {
-                    text: "Cancel"
-                    onClicked: clearConfirmDialog.close()
-                }
-
-                DankButton {
-                    id: clearConfirmBtn
-                    text: "Clear"
-                    focus: true
-                    backgroundColor: Theme.error
-                    textColor: Theme.onPrimary
-                    Keys.onReturnPressed: clicked()
-                    Keys.onEnterPressed: clicked()
-                    onClicked: {
-                        aiService.clearChat();
-                        composer.text = "";
-                        clearConfirmDialog.close();
-                        composer.forceActiveFocus();
-                    }
-                }
-            }
+        onConfirmed: {
+            aiService.clearChat();
+            composerArea.text = "";
+            composerArea.forceActiveFocus();
         }
     }
-
 }

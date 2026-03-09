@@ -6,8 +6,16 @@
 //   2. Gemini key as header (x-goog-api-key) — not in URL query param
 //   3. No --compressed flag (breaks StdioCollector)
 
-// Validate a URL for use as a provider base URL.
-// Returns { valid: bool, error: string } — error is empty when valid.
+/**
+ * Validate a URL for use as a provider base URL.
+ *
+ * Enforces: http(s) scheme only, valid hostname, max 2048 chars, no control
+ * characters or characters unsafe in URLs (angle brackets, quotes, backticks,
+ * curly braces, pipes, backslashes, spaces).
+ *
+ * @param {string} url - URL to validate.
+ * @returns {{ valid: boolean, error: string }} error is empty when valid or when URL is absent.
+ */
 function validateUrl(url) {
     var u = (url || "").trim();
     if (!u) return { valid: false, error: "" }; // empty is not an error, just absent
@@ -30,7 +38,15 @@ function normalizeBaseUrl(url) {
     return u.endsWith("/") ? u.slice(0, -1) : u;
 }
 
-// Sanitize API key: strip newlines and control characters to prevent header injection.
+/**
+ * Sanitize an API key by stripping newlines and control characters.
+ *
+ * Prevents HTTP header injection by removing CR, LF, null bytes, and all
+ * C0 control characters (U+0000–U+001F). The result is trimmed.
+ *
+ * @param {string} key - Raw API key string.
+ * @returns {string} Sanitized key, or "" if input is falsy.
+ */
 function sanitizeApiKey(key) {
     if (!key) return "";
     return key.replace(/[\r\n\x00-\x1f]/g, "").trim();
@@ -59,7 +75,16 @@ function openaiChatCompletionsUrl(baseUrl) {
     return b + "/v1/chat/completions";
 }
 
-// Escape a string for use inside a double-quoted curl config value.
+/**
+ * Escape a string for use inside a double-quoted curl config value.
+ *
+ * Curl config files (-K) use "value" syntax where backslashes, double quotes,
+ * and whitespace characters must be escaped. Without this, a JSON body containing
+ * quotes would break the config parser.
+ *
+ * @param {string} str - Raw string to escape.
+ * @returns {string} Escaped string safe for curl config double-quoted context.
+ */
 function escapeCurlConfig(str) {
     if (!str) return "";
     return str
@@ -70,8 +95,19 @@ function escapeCurlConfig(str) {
         .replace(/\t/g, "\\t");
 }
 
-// Returns { cmd: string[], body: string } where body is a curl config written to stdin.
-// All secrets (API keys, request body) go through stdin via -K -, hiding them from /proc/cmdline.
+/**
+ * Build a curl command array and stdin config body for a streaming API request.
+ *
+ * All sensitive data (URL, auth headers, request body) is passed through a curl
+ * config file on stdin (-K -), ensuring nothing appears in /proc/cmdline or ps output.
+ *
+ * @param {string} provider - Provider identifier.
+ * @param {Object} payload - Request payload (must include baseUrl, model, messages, timeout, etc.).
+ * @param {string} apiKey - Resolved API key (may be empty for Ollama).
+ * @returns {{ cmd: string[], body: string } | null}
+ *   cmd: curl argument array (no secrets). body: curl config string to write to stdin.
+ *   Returns null if the provider requires a key but none is provided.
+ */
 function buildCurlCommand(provider, payload, apiKey) {
     var request = buildRequest(provider, payload, apiKey);
     if (!request || !request.url)
@@ -289,8 +325,18 @@ function getProviderNames() {
     return Object.keys(registry);
 }
 
-// Clamp temperature to the provider's valid range.
-// Returns undefined if the model doesn't support temperature (e.g. OpenAI o1/o3).
+/**
+ * Clamp temperature to a provider's valid range, or return undefined if unsupported.
+ *
+ * Some models (OpenAI o1/o3 reasoning models) do not support temperature at all.
+ * Detection uses prefix matching with separator check: "o1-mini" matches but "o100" does not.
+ * Falls back to the provider's default temperature when the input is null/undefined.
+ *
+ * @param {string} provider - Provider identifier.
+ * @param {string} model - Model name (checked against tempUnsupportedModels).
+ * @param {number} temperature - Requested temperature value.
+ * @returns {number|undefined} Clamped temperature, or undefined if the model rejects temperature.
+ */
 function clampTemperature(provider, model, temperature) {
     var info = registry[provider] || registry["custom"];
     // Check if model doesn't support temperature

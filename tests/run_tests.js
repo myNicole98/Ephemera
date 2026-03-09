@@ -1138,6 +1138,73 @@ section("Providers.validateUrl");
     assert(r.valid, "allows safe path characters (hyphens, underscores, dots)");
 })();
 
+// ═════════════════════════════════════════════════════════════════
+// Backoff.js tests
+// ═════════════════════════════════════════════════════════════════
+
+var Backoff = loadPragmaLib("src/lib/Backoff.js");
+
+section("Backoff.computeDelay");
+
+(function() {
+    // Run multiple times to verify range with jitter
+    for (var i = 0; i < 20; i++) {
+        var d = Backoff.computeDelay(0, 2000, 30000);
+        assert(d >= 1000, "attempt 0: delay >= floor (1000ms), got " + d.toFixed(0));
+        assert(d <= 2000, "attempt 0: delay <= base (2000ms), got " + d.toFixed(0));
+    }
+
+    for (var j = 0; j < 20; j++) {
+        var d2 = Backoff.computeDelay(2, 2000, 30000);
+        assert(d2 >= 1000, "attempt 2: delay >= floor, got " + d2.toFixed(0));
+        assert(d2 <= 8000, "attempt 2: delay <= 8000ms (2000*2^2), got " + d2.toFixed(0));
+    }
+
+    // Cap at maxDelay
+    for (var k = 0; k < 20; k++) {
+        var d3 = Backoff.computeDelay(10, 2000, 30000);
+        assert(d3 >= 1000, "attempt 10: delay >= floor, got " + d3.toFixed(0));
+        assert(d3 <= 30000, "attempt 10: delay <= maxDelay (30000ms), got " + d3.toFixed(0));
+    }
+
+    // Default parameters
+    var d4 = Backoff.computeDelay(0);
+    assert(d4 >= 1000 && d4 <= 2000, "defaults: delay in [1000, 2000]");
+
+    // Zero/null attempt
+    var d5 = Backoff.computeDelay(null, 2000, 30000);
+    assert(d5 >= 1000 && d5 <= 2000, "null attempt treated as 0");
+})();
+
+section("Backoff.isInCooldown");
+
+(function() {
+    // No error state
+    assert(!Backoff.isInCooldown(0, 0), "no cooldown when lastErrorTime is 0");
+    assert(!Backoff.isInCooldown(Date.now(), 0), "no cooldown when consecutiveErrors is 0");
+    assert(!Backoff.isInCooldown(0, 3), "no cooldown when lastErrorTime is 0 even with errors");
+
+    // Just errored — should be in cooldown
+    assert(Backoff.isInCooldown(Date.now(), 1, 2000, 30000), "in cooldown immediately after error");
+    assert(Backoff.isInCooldown(Date.now(), 5, 2000, 30000), "in cooldown with 5 consecutive errors");
+
+    // Long ago error — should NOT be in cooldown
+    assert(!Backoff.isInCooldown(Date.now() - 60000, 1, 2000, 30000), "not in cooldown after 60s for 1 error");
+    assert(!Backoff.isInCooldown(Date.now() - 60000, 3, 2000, 30000), "not in cooldown after 60s for 3 errors");
+})();
+
+section("Backoff.maxDelayForAttempt");
+
+(function() {
+    assertEqual(Backoff.maxDelayForAttempt(0), 0, "0 errors = 0 delay");
+    assertEqual(Backoff.maxDelayForAttempt(1, 2000, 30000), 2000, "1 error = base delay");
+    assertEqual(Backoff.maxDelayForAttempt(2, 2000, 30000), 4000, "2 errors = 2x base");
+    assertEqual(Backoff.maxDelayForAttempt(3, 2000, 30000), 8000, "3 errors = 4x base");
+    assertEqual(Backoff.maxDelayForAttempt(4, 2000, 30000), 16000, "4 errors = 8x base");
+    assertEqual(Backoff.maxDelayForAttempt(5, 2000, 30000), 30000, "5 errors = capped at max");
+    assertEqual(Backoff.maxDelayForAttempt(10, 2000, 30000), 30000, "10 errors = still capped");
+})();
+
 // ─── Summary ───────────────────────────────────────────────────
 
 console.log("\n" + "=".repeat(50));

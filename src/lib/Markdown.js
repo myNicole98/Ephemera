@@ -16,6 +16,32 @@ function escapeHtml(str) {
               .replace(/"/g, '&quot;');
 }
 
+/**
+ * Convert markdown text to Qt-compatible HTML for display in QML Text (RichText mode).
+ *
+ * Processing pipeline:
+ * 1. Extract fenced code blocks and inline code into placeholders (pre-escaped).
+ * 2. Extract markdown tables into pre-built HTML (cell content escaped).
+ * 3. Escape remaining HTML entities (&, <, >).
+ * 4. Transform markdown syntax (headers, bold, italic, links, lists, blockquotes, hr).
+ * 5. Wrap/protect list and blockquote HTML in placeholders.
+ * 6. Auto-link plain URLs (http/https only).
+ * 7. Convert newlines to <br/> and paragraph breaks.
+ * 8. Restore all placeholders in reverse order.
+ * 9. Clean up redundant break/paragraph tags.
+ *
+ * Security: All user text is HTML-escaped before inline formatting is applied.
+ * Code block contents, table cells, link text, and link URLs are independently escaped.
+ * Link href attributes are restricted to http/https schemes.
+ *
+ * @param {string} text - Raw markdown text.
+ * @param {Object} [colors] - Theme colors for styled elements.
+ * @param {string} colors.codeBg - Background color for fenced code blocks.
+ * @param {string} colors.inlineCodeBg - Background color for inline code spans.
+ * @param {string} colors.blockquoteBg - Background color for blockquotes.
+ * @param {string} colors.blockquoteBorder - Left border color for blockquotes.
+ * @returns {string} HTML string safe for QML Text.RichText rendering.
+ */
 function markdownToHtml(text, colors) {
     if (!text) return "";
 
