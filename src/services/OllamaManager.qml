@@ -57,8 +57,9 @@ Item {
         _shuttingDown = true;
         ollamaIdleTimer.stop();
         retryTimer.stop();
-        // External Ollama: use pkill since we don't have a PID
-        ollamaKiller.command = ["pkill", "-U", Quickshell.env("USER") || "", "-f", "ollama serve"];
+        // External Ollama: use pkill -x for exact process name match (not -f substring)
+        // to avoid killing unrelated processes that merely contain "ollama" in their cmdline
+        ollamaKiller.command = ["pkill", "-x", "-U", Quickshell.env("USER") || "", "ollama"];
         ollamaKiller.running = true;
         ollamaReady = false;
         ollamaExternallyManaged = false;

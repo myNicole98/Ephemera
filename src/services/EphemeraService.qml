@@ -25,6 +25,10 @@ Item {
     property string lastUserText: ""
     property int lastHttpStatus: 0
 
+    // --- Error cooldown (prevents rapid-fire retries against failing endpoints) ---
+    property real _lastErrorTime: 0
+    readonly property int _errorCooldownMs: 2000
+
     // --- Persistence (opt-in) ---
     property bool persistChat: false
 
@@ -62,16 +66,32 @@ Item {
     readonly property bool hasApiKey: resolveApiKey().length > 0
     readonly property bool missingApiKey: needsApiKey && !hasApiKey
 
+    // --- Keyring (D-Bus Secret Service via secret-tool) ---
+    property var _keyringCache: ({})
+    property bool _keyringAvailable: false
+    property bool _keyringLookupPending: false
+    property bool _keyringLookupDeferred: false
+    property string _keyringLookupProvider: ""
+    property string _keyringStoreKey: ""
+    property string _keyringStoreProvider: ""
+
     Component.onCompleted: {
         loadSettings();
         loadChatHistory();
         ollamaManager.ping();
+        _checkSecretToolAvailable();
     }
 
     Component.onDestruction: {
         try { saveChatHistory(); }
         catch (e) { console.warn("Ephemera: error saving chat on destruction:", e); }
         ollamaManager.cleanupOnDestruction();
+    }
+
+    onProviderChanged: {
+        _lastErrorTime = 0;
+        if (_keyringAvailable)
+            refreshKeyringKey();
     }
 
     // ─── Ollama lifecycle (delegated) ─────────────────────────────
@@ -172,18 +192,31 @@ Item {
         }
     }
 
-    // ─── API key resolution (env vars only — never stored) ─────────
+    // ─── API key resolution (keyring → env var fallback) ───────────
 
     function resolveApiKey() {
         var info = Providers.getProviderInfo(provider);
         if (!info.envVar) return "";
+        var cached = _keyringCache[provider];
+        if (cached && cached.length > 0) return cached;
         return Quickshell.env(info.envVar) || "";
     }
 
     function hasApiKeyForProvider(prov) {
         var info = Providers.getProviderInfo(prov);
         if (!info.envVar) return true; // no key needed (e.g. Ollama)
+        var cached = _keyringCache[prov];
+        if (cached && cached.length > 0) return true;
         return (Quickshell.env(info.envVar) || "").length > 0;
+    }
+
+    function apiKeySource(prov) {
+        var info = Providers.getProviderInfo(prov);
+        if (!info.envVar) return "";
+        var cached = _keyringCache[prov];
+        if (cached && cached.length > 0) return "keyring";
+        if ((Quickshell.env(info.envVar) || "").length > 0) return "env";
+        return "";
     }
 
     function _envVarForProvider(prov) {
@@ -194,6 +227,64 @@ Item {
     function _providerDisplayName(prov) {
         var info = Providers.getProviderInfo(prov);
         return info.name || "custom provider";
+    }
+
+    // ─── Keyring (D-Bus Secret Service) ─────────────────────────────
+
+    // Always return a new object so QML property var change detection fires.
+    function _cloneCache() {
+        var c = {};
+        var old = _keyringCache;
+        for (var k in old) c[k] = old[k];
+        return c;
+    }
+
+    function _checkSecretToolAvailable() {
+        secretToolCheck.running = true;
+    }
+
+    function refreshKeyringKey() {
+        if (!_keyringAvailable) return;
+        if (provider === "ollama") return;
+        if (keyringLookup.running) {
+            _keyringLookupDeferred = true;
+            return;
+        }
+        var info = Providers.getProviderInfo(provider);
+        if (!info.envVar) return;
+        _keyringLookupProvider = provider;
+        keyringLookup.command = ["secret-tool", "lookup", "service", "ephemera", "provider", provider];
+        _keyringLookupPending = true;
+        keyringLookup.running = true;
+    }
+
+    function storeKeyringKey(prov, key) {
+        if (!_keyringAvailable || !key) return;
+        if (keyringStore.running) return;
+        var safeKey = Providers.sanitizeApiKey(key);
+        if (!safeKey) return;
+        // Optimistically update cache (new object to trigger bindings)
+        var cache = _cloneCache();
+        cache[prov] = safeKey;
+        _keyringCache = cache;
+        _keyringStoreKey = safeKey;
+        _keyringStoreProvider = prov;
+        var info = Providers.getProviderInfo(prov);
+        var label = "Ephemera " + (info.name || prov) + " API key";
+        keyringStore.command = ["secret-tool", "store", "--label=" + label, "service", "ephemera", "provider", prov];
+        keyringStore.stdinEnabled = true;
+        keyringStore.running = true;
+    }
+
+    function clearKeyringKey(prov) {
+        if (!_keyringAvailable) return;
+        if (keyringClear.running) return;
+        // Optimistically clear cache (new object to trigger bindings)
+        var cache = _cloneCache();
+        delete cache[prov];
+        _keyringCache = cache;
+        keyringClear.command = ["secret-tool", "clear", "service", "ephemera", "provider", prov];
+        keyringClear.running = true;
     }
 
     // ─── Chat (ephemeral, in-memory only) ──────────────────────────
@@ -245,7 +336,7 @@ Item {
                     role: m.role, content: m.content, thinking: m.thinking || "",
                     id: m.id, timestamp: m.timestamp, status: status,
                     variantIndex: m.variantIndex || 0, variantCount: m.variantCount || 1,
-                    modelName: m.modelName || "", streamStats: ""
+                    modelName: m.modelName || "", streamStats: "", requestPayload: ""
                 });
                 messageIndexMap[m.id] = messagesModel.count - 1;
                 if (m.role === "user") lastUserText = m.content;
@@ -257,6 +348,10 @@ Item {
         }
     }
 
+    function _isInErrorCooldown() {
+        return _lastErrorTime > 0 && (Date.now() - _lastErrorTime) < _errorCooldownMs;
+    }
+
     function sendMessage(text) {
         if (!text || text.trim().length === 0) return;
         if (isStreaming || chatFetcher.running) {
@@ -264,6 +359,7 @@ Item {
                 markError(activeStreamId, "Please wait until the current response finishes.");
             return;
         }
+        if (_isInErrorCooldown()) return;
         ollamaManager.stopIdleTimer();
         lastRequestFailed = false;
         startStreaming(text.trim());
@@ -272,6 +368,7 @@ Item {
     function regenerate() {
         if (isStreaming || !lastUserText) return;
         if (messagesModel.count === 0) return;
+        if (_isInErrorCooldown()) return;
         ollamaManager.stopIdleTimer();
 
         var lastIdx = messagesModel.count - 1;
@@ -356,6 +453,7 @@ Item {
 
     function editAndRegenerate(msgId, newText) {
         if (isStreaming || !newText || newText.trim().length === 0) return;
+        if (_isInErrorCooldown()) return;
 
         var idx = findIndexById(msgId);
         if (idx < 0) return;
@@ -383,7 +481,7 @@ Item {
 
         var now = Date.now();
         var streamId = "assistant-" + now;
-        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1, modelName: model, streamStats: "" });
+        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1, modelName: model, streamStats: "", requestPayload: "" });
         messageIndexMap[streamId] = messagesModel.count - 1;
         activeStreamId = streamId;
         isStreaming = true;
@@ -473,11 +571,11 @@ Item {
         var streamId = "assistant-" + now;
 
         var userId = "user-" + now;
-        messagesModel.append({ role: "user", content: text, thinking: "", timestamp: now, id: userId, status: "ok", variantIndex: 0, variantCount: 1, modelName: "", streamStats: "" });
+        messagesModel.append({ role: "user", content: text, thinking: "", timestamp: now, id: userId, status: "ok", variantIndex: 0, variantCount: 1, modelName: "", streamStats: "", requestPayload: "" });
         messageIndexMap[userId] = messagesModel.count - 1;
         lastUserText = text;
 
-        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now + 1, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1, modelName: model, streamStats: "" });
+        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now + 1, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1, modelName: model, streamStats: "", requestPayload: "" });
         messageIndexMap[streamId] = messagesModel.count - 1;
         activeStreamId = streamId;
         isStreaming = true;
@@ -501,7 +599,10 @@ Item {
                 markError(activeStreamId, ollamaReady ? "No Ollama model selected." : "Ollama is not running. Check that ollama is installed and running.");
             } else {
                 var envVar = _envVarForProvider(provider);
-                markError(activeStreamId, "No API key found.\nSet the " + envVar + " environment variable to connect to " + _providerDisplayName(provider) + ".");
+                var hint = _keyringAvailable
+                    ? "Store a key in Settings, or set the " + envVar + " environment variable."
+                    : "Set the " + envVar + " environment variable before starting Quickshell.";
+                markError(activeStreamId, "No API key found.\n" + hint);
             }
             return;
         }
@@ -515,6 +616,9 @@ Item {
         pendingStdinBody = result.body;
         chatFetcher.stdinEnabled = true;
         chatFetcher.command = result.cmd;
+        var payloadIdx = findIndexById(activeStreamId);
+        if (payloadIdx >= 0)
+            messagesModel.setProperty(payloadIdx, "requestPayload", JSON.stringify(payload, null, 2));
         chatFetcher.running = true;
     }
 
@@ -682,6 +786,7 @@ Item {
         isStreaming = false;
         activeStreamId = "";
         lastRequestFailed = true;
+        _lastErrorTime = Date.now();
     }
 
     function markCancelled(streamId) {
@@ -774,6 +879,7 @@ Item {
         _lastFinalizedStreamId = streamId;
         isStreaming = false;
         activeStreamId = "";
+        _lastErrorTime = 0;
         if (isOllama) ollamaManager.queryGpuStatus(model);
         saveChatHistory();
     }
@@ -830,5 +936,69 @@ Item {
                 markError(root.activeStreamId, root._curlExitHint(exitCode));
             }
         }
+    }
+
+    // ─── Keyring processes ────────────────────────────────────────
+
+    Process {
+        id: secretToolCheck
+        running: false
+        command: ["which", "secret-tool"]
+        onExited: exitCode => {
+            root._keyringAvailable = (exitCode === 0);
+            if (root._keyringAvailable)
+                root.refreshKeyringKey();
+        }
+    }
+
+    Process {
+        id: keyringLookup
+        running: false
+        stdout: StdioCollector {
+            id: keyringLookupCollector
+            waitForEnd: true
+        }
+        onExited: exitCode => {
+            root._keyringLookupPending = false;
+            if (exitCode === 0) {
+                var key = Providers.sanitizeApiKey(keyringLookupCollector.text);
+                if (key.length > 0) {
+                    var cache = root._cloneCache();
+                    cache[root._keyringLookupProvider] = key;
+                    root._keyringCache = cache;
+                }
+            }
+            if (root._keyringLookupDeferred) {
+                root._keyringLookupDeferred = false;
+                root.refreshKeyringKey();
+            }
+        }
+    }
+
+    Process {
+        id: keyringStore
+        running: false
+        stdinEnabled: true
+        onRunningChanged: {
+            if (running && root._keyringStoreKey) {
+                keyringStore.write(root._keyringStoreKey);
+                keyringStore.stdinEnabled = false;
+                root._keyringStoreKey = "";
+            }
+        }
+        onExited: exitCode => {
+            if (exitCode !== 0 && root._keyringStoreProvider) {
+                // Roll back optimistic cache update on failure
+                var cache = root._cloneCache();
+                delete cache[root._keyringStoreProvider];
+                root._keyringCache = cache;
+            }
+            root._keyringStoreProvider = "";
+        }
+    }
+
+    Process {
+        id: keyringClear
+        running: false
     }
 }

@@ -22,6 +22,7 @@ Unit tests: `node tests/run_tests.js` — tests pure JS modules (Providers.js, S
 - **DMS permissions are silent** — missing permission declarations in `plugin.json` prevent PluginService calls without logging errors. Current permissions: `settings_read`, `settings_write`.
 - **pluginData null during init** — use `??` operator for `pluginData` access; values are `undefined` before first load.
 - **DMS auto-injected properties** — `pluginData`, `pluginService`, `pluginId` are injected into the root component without declaration. Don't redeclare them.
+- **`_keyringCache` clone requirement** — always use `_cloneCache()` when mutating `_keyringCache`. QML `property var` skips change notification when reassigned the same object reference, which silently breaks `hasApiKey`/`missingApiKey` bindings.
 
 ## Conventions (non-obvious)
 
@@ -34,7 +35,7 @@ Unit tests: `node tests/run_tests.js` — tests pure JS modules (Providers.js, S
 
 ## Architecture Decisions
 
-- **curl via Process, not native HTTP** — requests pipe body via stdin (`-d @-`) so secrets never appear in `/proc/cmdline`.
+- **curl via Process, not native HTTP** — requests use `curl -K -` (config from stdin) so URL, auth headers, and body never appear in `/proc/cmdline`.
 - **Deferred markdown** — `markdownToHtml()` runs only after streaming completes, never per-delta. `_lastRenderedText` cache prevents redundant re-renders.
 - **Variants, not replacements** — regeneration saves current response into `variantStore[msgId]` and streams a new one. Capped at 10 (FIFO eviction).
 - **Stream isolation** — `_streamContent`/`_streamThinking` buffers are independent of the displayed variant. `_streamVariantIndex` tracks the write target.
@@ -44,9 +45,11 @@ Unit tests: `node tests/run_tests.js` — tests pure JS modules (Providers.js, S
 
 ## Security Invariants
 
-- API keys: env vars only, never persisted by PluginService.
-- curl stdin for request bodies (not `/proc/cmdline`-visible args).
-- **Known trade-off: API key header visibility** — API keys are passed via curl `-H` headers (e.g., `Authorization: Bearer ...`), which are visible in `/proc/<pid>/cmdline` and `ps` output for the brief lifetime of the curl process. Request *bodies* (containing conversation content) are safely passed via stdin. Moving headers to a temp file or `--header @file` would add complexity and race conditions with cleanup; the current approach matches how most CLI tools handle auth headers.
+- API keys: system keyring (D-Bus Secret Service) or env vars, never persisted by PluginService. Keyring secrets are encrypted at rest by the keyring daemon, unlocked with the user's session login.
+- `secret-tool store` receives keys via stdin — never in `/proc/cmdline`. `_keyringCache` exists only in process memory.
+- `curl -K -` for all API requests — URL, auth headers, and body are passed via stdin config, never visible in `/proc/cmdline` or `ps` output. The `escapeCurlConfig()` function handles proper escaping for the curl config format.
 - HTML escaped before markdown rendering; link schemes whitelisted to http/https.
-- Custom URLs validated: http(s) only, valid hostname, max 2048 chars.
-- Chat persistence opt-in; API keys never stored regardless.
+- Custom URLs validated: http(s) only, valid hostname, max 2048 chars, no unsafe characters (angle brackets, quotes, backticks, etc.).
+- **Error cooldown** — 2-second cooldown after request errors prevents rapid-fire retries against failing endpoints.
+- `forceShutdownExternal()` uses `pkill -x` (exact process name match) to avoid killing unrelated processes.
+- Chat persistence opt-in; API keys never stored in PluginService regardless.

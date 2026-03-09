@@ -27,6 +27,9 @@ Item {
     property real streamStartTime: 0
     property int streamTokenCount: 0
     property string streamStats: ""
+    property bool isLocalProvider: false
+    property string requestPayload: ""
+    property bool _requestInfoExpanded: false
 
     readonly property bool isUser: role === "user"
     readonly property real bubbleMaxWidth: isUser ? Math.max(240, Math.floor(width * 0.82)) : width
@@ -297,6 +300,23 @@ Item {
                         interval: 1500
                         onTriggered: copyBtn._copied = false
                     }
+
+                    Behavior on opacity {
+                        NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
+                    }
+                }
+
+                DankActionButton {
+                    id: requestInfoBtn
+                    visible: !root.isUser && root.requestPayload.length > 0
+                    opacity: hoverHandler.hovered ? 1.0 : (root._requestInfoExpanded ? 0.8 : 0.4)
+                    iconName: "data_object"
+                    buttonSize: 24
+                    iconSize: 14
+                    backgroundColor: Theme.withAlpha(Theme.surfaceContainer, 0)
+                    iconColor: root._requestInfoExpanded ? Theme.primary : Theme.surfaceVariantText
+                    tooltipText: root._requestInfoExpanded ? "Hide request" : "View request"
+                    onClicked: root._requestInfoExpanded = !root._requestInfoExpanded
 
                     Behavior on opacity {
                         NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
@@ -620,7 +640,7 @@ Item {
                     // Waiting for first token hint
                     StyledText {
                         visible: root.status === "streaming" && root.streamStartTime === 0 && root.text.length === 0 && root.thinking.length === 0
-                        text: "Loading model\u2026"
+                        text: root.isLocalProvider ? "Loading model\u2026" : "Sending request\u2026"
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.surfaceTextMedium
                         opacity: 0.7
@@ -704,6 +724,64 @@ Item {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
                     onClicked: parent._statsVisible = !parent._statsVisible
+                }
+            }
+
+            // Request payload section (collapsible)
+            Column {
+                width: parent.width
+                visible: root._requestInfoExpanded && root.requestPayload.length > 0
+                spacing: Theme.spacingXS
+
+                Rectangle {
+                    width: parent.width
+                    height: 1
+                    color: Theme.withAlpha(Theme.outline, 0.15)
+                }
+
+                Row {
+                    spacing: Theme.spacingXS
+
+                    DankIcon {
+                        name: "data_object"
+                        size: 14
+                        color: Theme.primary
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    StyledText {
+                        text: "Request payload"
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.weight: Font.Medium
+                        color: Theme.surfaceTextMedium
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                Flickable {
+                    width: parent.width
+                    height: Math.min(contentHeight, 250)
+                    contentHeight: requestInfoTextArea.implicitHeight
+                    clip: true
+                    flickableDirection: Flickable.VerticalFlick
+
+                    TextArea {
+                        id: requestInfoTextArea
+                        width: parent.width
+                        text: root.requestPayload
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.family: Theme.monoFontFamily
+                        color: Theme.surfaceTextMedium
+                        readOnly: true
+                        selectByMouse: true
+                        background: null
+                        leftPadding: 4
+                        rightPadding: 4
+                    }
+
+                    ScrollBar.vertical: ScrollBar {}
                 }
             }
         }

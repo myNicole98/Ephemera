@@ -555,6 +555,32 @@ section("Providers.getProviderNames");
     assertEqual(names.length, 5, "exactly 5 providers");
 })();
 
+section("Providers.escapeCurlConfig");
+(function() {
+    assertEqual(Providers.escapeCurlConfig("hello"), "hello", "passes clean string through");
+    assertEqual(Providers.escapeCurlConfig('say "hi"'), 'say \\"hi\\"', "escapes double quotes");
+    assertEqual(Providers.escapeCurlConfig("back\\slash"), "back\\\\slash", "escapes backslashes");
+    assertEqual(Providers.escapeCurlConfig("line\nbreak"), "line\\nbreak", "escapes newlines");
+    assertEqual(Providers.escapeCurlConfig("tab\there"), "tab\\there", "escapes tabs");
+    assertEqual(Providers.escapeCurlConfig(""), "", "handles empty string");
+    assertEqual(Providers.escapeCurlConfig(null), "", "handles null");
+})();
+
+// Helper: extract JSON body from a curl config string
+function parseCurlConfigBody(config) {
+    var match = config.match(/^data = "((?:[^"\\]|\\.)*)"/m);
+    if (!match) return null;
+    var val = match[1];
+    // Unescape curl config escaping (placeholder for \\\\ to avoid double-processing)
+    val = val.replace(/\\\\/g, '\x01')
+             .replace(/\\"/g, '"')
+             .replace(/\\n/g, '\n')
+             .replace(/\\r/g, '\r')
+             .replace(/\\t/g, '\t')
+             .replace(/\x01/g, '\\');
+    return JSON.parse(val);
+}
+
 section("Providers.buildCurlCommand");
 (function() {
     // Ollama (no key needed)
@@ -566,19 +592,26 @@ section("Providers.buildCurlCommand");
     var r = Providers.buildCurlCommand("ollama", payload, "");
     assert(r !== null, "Ollama request builds without key");
     assert(r.cmd.indexOf("curl") >= 0, "command starts with curl");
-    assert(r.cmd.indexOf("-d") >= 0, "includes -d flag");
-    assert(r.cmd.indexOf("@-") >= 0, "uses stdin for body");
+    assert(r.cmd.indexOf("-K") >= 0, "uses -K flag for config-from-stdin");
     assert(r.cmd.indexOf("--max-time") >= 0, "includes timeout");
-    var body = JSON.parse(r.body);
+    // Body is now in curl config, not direct JSON
+    assert(r.body.indexOf('url = "') >= 0, "config contains url directive");
+    assert(r.body.indexOf('data = "') >= 0, "config contains data directive");
+    var body = parseCurlConfigBody(r.body);
     assertEqual(body.model, "llama3", "body contains model");
     assertEqual(body.stream, true, "body has stream: true");
+
+    // No secrets in /proc/cmdline — verify cmd has no auth headers or URLs
+    var cmdStr = r.cmd.join(" ");
+    assert(cmdStr.indexOf("localhost:11434") < 0, "URL not in cmd args (hidden in config)");
 
     // OpenAI (key required)
     payload.provider = "openai";
     payload.baseUrl = "https://api.openai.com";
     r = Providers.buildCurlCommand("openai", payload, "sk-test123");
     assert(r !== null, "OpenAI request builds with key");
-    assert(r.cmd.join(" ").indexOf("Bearer sk-test123") >= 0, "includes auth header");
+    assert(r.body.indexOf("Bearer sk-test123") >= 0, "auth header in config body");
+    assert(r.cmd.join(" ").indexOf("Bearer") < 0, "auth header NOT in cmd args");
 
     // OpenAI without key returns null
     r = Providers.buildCurlCommand("openai", payload, "");
@@ -590,16 +623,17 @@ section("Providers.buildCurlCommand");
     payload.thinkingEnabled = false;
     r = Providers.buildCurlCommand("anthropic", payload, "sk-ant-test");
     assert(r !== null, "Anthropic request builds");
-    assert(r.cmd.join(" ").indexOf("x-api-key") >= 0, "uses x-api-key header");
-    assert(r.cmd.join(" ").indexOf("anthropic-version") >= 0, "includes version header");
-    body = JSON.parse(r.body);
+    assert(r.body.indexOf("x-api-key") >= 0, "uses x-api-key header in config");
+    assert(r.body.indexOf("anthropic-version") >= 0, "includes version header in config");
+    assert(r.cmd.join(" ").indexOf("x-api-key") < 0, "x-api-key NOT in cmd args");
+    body = parseCurlConfigBody(r.body);
     assert(body.max_tokens > 0, "Anthropic body has max_tokens");
 
     // Anthropic with thinking enabled
     payload.thinkingEnabled = true;
     r = Providers.buildCurlCommand("anthropic", payload, "sk-ant-test");
-    assert(r.cmd.join(" ").indexOf("interleaved-thinking") >= 0, "includes thinking beta header");
-    body = JSON.parse(r.body);
+    assert(r.body.indexOf("interleaved-thinking") >= 0, "includes thinking beta header in config");
+    body = parseCurlConfigBody(r.body);
     assert(body.thinking !== undefined, "body includes thinking config");
     assertEqual(body.thinking.type, "enabled", "thinking type is enabled");
     assert(body.thinking.budget_tokens > 0, "thinking budget set");
@@ -610,19 +644,21 @@ section("Providers.buildCurlCommand");
     payload.thinkingEnabled = false;
     r = Providers.buildCurlCommand("gemini", payload, "gemini-key");
     assert(r !== null, "Gemini request builds");
-    assert(r.cmd.join(" ").indexOf("x-goog-api-key") >= 0, "uses header for Gemini key (not URL param)");
-    assert(r.cmd.join(" ").indexOf("streamGenerateContent") >= 0, "uses streaming endpoint");
-    assert(r.cmd.join(" ").indexOf("alt=sse") >= 0, "requests SSE format");
+    assert(r.body.indexOf("x-goog-api-key") >= 0, "uses header for Gemini key in config");
+    assert(r.body.indexOf("streamGenerateContent") >= 0, "uses streaming endpoint");
+    assert(r.body.indexOf("alt=sse") >= 0, "requests SSE format");
+    assert(r.cmd.join(" ").indexOf("x-goog-api-key") < 0, "Gemini key NOT in cmd args");
 
     // Custom provider delegates to openai
     r = Providers.buildCurlCommand("custom", payload, "custom-key");
     assert(r !== null, "Custom provider builds");
 
-    // Key sanitization
+    // Key sanitization — dirty key still builds, no control chars leak
     r = Providers.buildCurlCommand("openai", payload, "sk-test\r\n\x00injected");
     assert(r !== null, "builds even with dirty key");
-    assert(r.cmd.join(" ").indexOf("\r") < 0, "no CR in command");
-    assert(r.cmd.join(" ").indexOf("\n") < 0, "no LF in command");
+    assert(r.body.indexOf("\r") < 0, "no CR in config body");
+    // Note: \\n in config is the escaped literal, not an actual newline
+    assert(r.body.indexOf("sk-testinjected") >= 0, "sanitized key in config");
 })();
 
 section("Providers.buildRequest — system prompt handling");
@@ -638,7 +674,7 @@ section("Providers.buildRequest — system prompt handling");
     };
 
     var r = Providers.buildCurlCommand("anthropic", payload, "sk-test");
-    var body = JSON.parse(r.body);
+    var body = parseCurlConfigBody(r.body);
     assertEqual(body.system, "Be helpful", "Anthropic extracts system to top-level");
     assertEqual(body.messages.length, 1, "system removed from messages");
 
@@ -646,7 +682,7 @@ section("Providers.buildRequest — system prompt handling");
     payload.provider = "gemini";
     payload.baseUrl = "https://generativelanguage.googleapis.com";
     r = Providers.buildCurlCommand("gemini", payload, "gem-key");
-    body = JSON.parse(r.body);
+    body = parseCurlConfigBody(r.body);
     assert(body.system_instruction !== undefined, "Gemini has system_instruction");
     assertEqual(body.system_instruction.parts[0].text, "Be helpful", "Gemini system text");
 
@@ -654,7 +690,7 @@ section("Providers.buildRequest — system prompt handling");
     payload.provider = "openai";
     payload.baseUrl = "https://api.openai.com";
     r = Providers.buildCurlCommand("openai", payload, "sk-test");
-    body = JSON.parse(r.body);
+    body = parseCurlConfigBody(r.body);
     assertEqual(body.messages[0].role, "system", "OpenAI keeps system in messages");
 })();
 
@@ -667,13 +703,13 @@ section("Providers — unlimited tokens");
         thinkingEnabled: false
     };
     var r = Providers.buildCurlCommand("anthropic", payload, "sk-test");
-    var body = JSON.parse(r.body);
+    var body = parseCurlConfigBody(r.body);
     assertEqual(body.max_tokens, 128000, "Anthropic uses 128000 when unlimited (max_tokens=0)");
 
     payload.provider = "openai";
     payload.baseUrl = "https://api.openai.com";
     r = Providers.buildCurlCommand("openai", payload, "sk-test");
-    body = JSON.parse(r.body);
+    body = parseCurlConfigBody(r.body);
     assertEqual(body.max_tokens, undefined, "OpenAI omits max_tokens when 0");
 })();
 
@@ -1052,6 +1088,12 @@ section("Providers.validateUrl");
     r = Providers.validateUrl("http://localhost:11434");
     assert(r.valid, "valid http localhost URL");
 
+    r = Providers.validateUrl("https://api.openai.com/v1");
+    assert(r.valid, "valid URL with path");
+
+    r = Providers.validateUrl("http://192.168.1.1:8000");
+    assert(r.valid, "valid URL with IP and port");
+
     r = Providers.validateUrl("ftp://example.com");
     assert(!r.valid, "rejects ftp scheme");
     assert(r.error.indexOf("http://") >= 0, "error mentions http");
@@ -1066,6 +1108,34 @@ section("Providers.validateUrl");
 
     r = Providers.validateUrl("https://!@#$");
     assert(!r.valid, "rejects invalid hostname");
+
+    // Path injection / unsafe character tests
+    r = Providers.validateUrl("http://localhost:11434/<script>alert(1)</script>");
+    assert(!r.valid, "rejects angle brackets in URL");
+
+    r = Providers.validateUrl("http://example.com/path with spaces");
+    assert(!r.valid, "rejects spaces in URL");
+
+    r = Providers.validateUrl('http://example.com/"quoted"');
+    assert(!r.valid, "rejects double quotes in URL");
+
+    r = Providers.validateUrl("http://example.com/'quoted'");
+    assert(!r.valid, "rejects single quotes in URL");
+
+    r = Providers.validateUrl("http://example.com/`backtick`");
+    assert(!r.valid, "rejects backticks in URL");
+
+    r = Providers.validateUrl("http://example.com/{braces}");
+    assert(!r.valid, "rejects curly braces in URL");
+
+    r = Providers.validateUrl("http://example.com/path|pipe");
+    assert(!r.valid, "rejects pipe character in URL");
+
+    r = Providers.validateUrl("http://example.com/path\\backslash");
+    assert(!r.valid, "rejects backslash in URL");
+
+    r = Providers.validateUrl("http://example.com/ok-path_name.ext/v2");
+    assert(r.valid, "allows safe path characters (hyphens, underscores, dots)");
 })();
 
 // ─── Summary ───────────────────────────────────────────────────

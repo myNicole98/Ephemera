@@ -23,13 +23,15 @@ Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plug
 - **Regenerate with variant pagination** — retry the last assistant response with a single click; previous responses are preserved and navigable with `< 1/2 >` pagination arrows (ChatGPT-style), even mid-stream; each variant remembers which model generated it, so switching models between regenerations shows the correct model chip per variant
 - **Export conversation** — copy the full conversation as markdown to clipboard, or save to a `.md` file in your home directory
 - **Optional persistence** — messages are ephemeral by default; enable **Save Chat History** in settings to persist conversations across sessions (API keys are never stored)
-- **Security-first** — request bodies sent via stdin (never in `/proc/cmdline`), API keys passed as headers (not URL params), link text and URLs HTML-escaped, link scheme restricted to http/https, custom URLs validated, stdout buffer capped at 5 MB
+- **System keyring integration** — store API keys encrypted in GNOME Keyring / KDE Wallet / KeePassXC via `secret-tool`; env vars as fallback; keyring UI hidden gracefully when `secret-tool` is not installed
+- **Security-first** — API keys stored encrypted in the system keyring (never by PluginService), request bodies sent via stdin (never in `/proc/cmdline`), API keys passed as headers (not URL params), link text and URLs HTML-escaped, link scheme restricted to http/https, custom URLs validated, stdout buffer capped at 5 MB
 
 ## Requirements
 
 - [Quickshell](https://github.com/quickshell-mirror/quickshell) with a configuration that provides `qs.Common`, `qs.Widgets`, and `qs.Services` modules
 - `curl` (used for API requests)
 - `wl-copy` from [wl-clipboard](https://github.com/bugaevc/wl-clipboard) (for the copy button)
+- `secret-tool` from [libsecret](https://wiki.gnome.org/Projects/Libsecret) (optional — for storing API keys in the system keyring)
 - For Ollama: [Ollama](https://ollama.com) installed and at least one model pulled
 
 ## Installation
@@ -40,7 +42,30 @@ Place or symlink this directory into your Quickshell configuration's plugin path
 
 ### API Keys
 
-Set the appropriate environment variable before starting Quickshell:
+#### System keyring (recommended)
+
+If `secret-tool` is installed, you can store API keys directly from the Settings panel. Keys are saved encrypted in your system keyring (GNOME Keyring, KDE Wallet, KeePassXC, or any [freedesktop.org Secret Service](https://specifications.freedesktop.org/secret-service/latest/) provider). The keyring is unlocked with your login session — no extra passwords to manage.
+
+1. Open Settings (tune icon)
+2. Scroll to **API Keys**
+3. Paste your key and click **Save**
+
+You can also manage keys from the command line:
+
+```bash
+# Store a key
+echo -n "sk-..." | secret-tool store --label="Ephemera OpenAI API key" service ephemera provider openai
+
+# Check if a key is stored
+secret-tool lookup service ephemera provider openai
+
+# Remove a key
+secret-tool clear service ephemera provider openai
+```
+
+#### Environment variables (fallback)
+
+If `secret-tool` is not installed, or you prefer env vars, set them before starting Quickshell. The keyring is checked first; env vars are used as a fallback.
 
 | Provider   | Environment Variable  |
 |------------|-----------------------|
@@ -67,7 +92,7 @@ All settings are configurable from the in-app settings panel (tune icon):
 - **Ollama Controls** — refresh models button, explicit start/stop button, idle auto-stop timeout (Never, 5, 10, 15, or 30 minutes; only auto-stops Ollama if the plugin started it)
 - **Save Chat History** — persist conversations across sessions (off by default)
 
-Settings are persisted via Quickshell's `PluginService`. API keys are never stored.
+Settings are persisted via Quickshell's `PluginService`. API keys are stored only in the system keyring, never by PluginService.
 
 ## Usage
 
@@ -90,7 +115,7 @@ Open the slideout panel via your shell's configured keybind or action. Type a me
 - **Export** — click the copy icon in the header to copy the conversation as markdown, or the save icon to write it to `~/ephemera-chat-<timestamp>.md`
 - **Expand** — use the expand button to widen the panel (480px → 960px); model chips in the header and message bubbles expand to show full model names
 - **Error hints** — HTTP errors display contextual suggestions (e.g., 401 → check API key, 429 → rate limited)
-- **Missing API key banner** — when a required API key is absent, a prominent banner in the chat area shows which environment variable to set
+- **Missing API key banner** — when a required API key is absent, a prominent banner in the chat area directs you to Settings (if keyring is available) or shows which environment variable to set
 
 ## Known Limitations
 
@@ -110,19 +135,28 @@ Ephemera pings `http://localhost:11434/api/tags` on startup. If Ollama isn't fou
 
 ### API key not detected
 
-API keys are read from environment variables. They must be set **before** Quickshell starts.
+**Easiest fix:** install `secret-tool` and store your key from the Settings panel. This avoids env var scoping issues entirely.
 
 ```bash
-# In your shell profile (~/.bashrc, ~/.zshrc, etc.):
-export OPENAI_API_KEY="sk-..."
-export ANTHROPIC_API_KEY="sk-ant-..."
-export GEMINI_API_KEY="AI..."
-export EPHEMERA_API_KEY="..."   # for custom providers
+# Arch
+sudo pacman -S libsecret
+
+# Ubuntu/Debian
+sudo apt install libsecret-tools
 ```
 
-Check that the variable is set: `echo $OPENAI_API_KEY`
+**If using env vars:** they must be set **before** Quickshell starts. Variables set in `~/.bashrc` or `~/.zshrc` are often not available to the compositor because it launches before interactive shell configs are sourced.
 
-If it's set but Ephemera still shows "API key not found", Quickshell may not be inheriting your shell environment. Try launching Quickshell from a terminal where the variable is set.
+```bash
+# Reliable for compositors — use systemd environment.d:
+# ~/.config/environment.d/ephemera.conf
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GEMINI_API_KEY=AI...
+EPHEMERA_API_KEY=...
+```
+
+You can also export them in your shell profile, but you may need to launch Quickshell from a terminal where the variables are set.
 
 ### Empty responses
 

@@ -17,6 +17,9 @@ function validateUrl(url) {
         return { valid: false, error: "Must start with http:// or https://" };
     if (!/^https?:\/\/[a-zA-Z0-9\-_.:]/.test(u))
         return { valid: false, error: "Invalid hostname in URL." };
+    // Reject control characters and characters unsafe in URLs (prevents injection via path)
+    if (/[\x00-\x20\x7f<>"'{}|\\^`]/.test(u))
+        return { valid: false, error: "URL contains invalid characters." };
     return { valid: true, error: "" };
 }
 
@@ -56,31 +59,47 @@ function openaiChatCompletionsUrl(baseUrl) {
     return b + "/v1/chat/completions";
 }
 
-// Returns { cmd: string[], body: string } where body should be written to stdin.
+// Escape a string for use inside a double-quoted curl config value.
+function escapeCurlConfig(str) {
+    if (!str) return "";
+    return str
+        .replace(/\\/g, "\\\\")
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, "\\n")
+        .replace(/\r/g, "\\r")
+        .replace(/\t/g, "\\t");
+}
+
+// Returns { cmd: string[], body: string } where body is a curl config written to stdin.
+// All secrets (API keys, request body) go through stdin via -K -, hiding them from /proc/cmdline.
 function buildCurlCommand(provider, payload, apiKey) {
     var request = buildRequest(provider, payload, apiKey);
     if (!request || !request.url)
         return null;
 
     var timeout = payload.timeout || 30;
+    // Command has no secrets — URL, headers, and body all go through stdin config
     var cmd = [
-        "curl", "-N", "-sS", "--no-buffer", "--show-error",
+        "curl", "-K", "-", "-N", "-sS", "--no-buffer", "--show-error",
         "--connect-timeout", "5",
         "--max-time", String(timeout),
-        "-w", "\\nEPH_STATUS:%{http_code}\\n",
-        "-H", "Content-Type: application/json"
+        "-w", "\\nEPH_STATUS:%{http_code}\\n"
     ];
 
+    // Build curl config for stdin — hides URL, auth headers, and body from /proc/cmdline
+    var config = 'url = "' + escapeCurlConfig(request.url) + '"\n';
+    config += 'request = "POST"\n';
+    config += 'header = "Content-Type: application/json"\n';
+
     var headers = request.headers || [];
-    for (var i = 0; i < headers.length; i++) {
-        cmd.push(headers[i]);
+    for (var i = 0; i < headers.length; i += 2) {
+        if (headers[i] === "-H" && headers[i + 1])
+            config += 'header = "' + escapeCurlConfig(headers[i + 1]) + '"\n';
     }
 
-    // Body via stdin — never in /proc/cmdline
-    cmd.push("-d", "@-");
-    cmd.push(request.url);
+    config += 'data = "' + escapeCurlConfig(request.body || "{}") + '"\n';
 
-    return { cmd: cmd, body: request.body || "{}" };
+    return { cmd: cmd, body: config };
 }
 
 function buildRequest(provider, payload, apiKey) {

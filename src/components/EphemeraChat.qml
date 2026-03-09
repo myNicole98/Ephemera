@@ -492,6 +492,7 @@ Item {
                 modelName: aiService.model || "Assistant"
                 expanded: root.slideoutExpanded
                 canRegenerate: !aiService.isStreaming && aiService.lastUserText.length > 0
+                isLocalProvider: aiService.isOllama
                 streamStartTime: aiService.streamStartTime
                 streamTokenCount: aiService.streamTokenCount
                 onRegenerateRequested: aiService.regenerate()
@@ -540,7 +541,9 @@ Item {
 
                     StyledText {
                         width: parent.width
-                        text: "Set the " + aiService._envVarForProvider(aiService.provider) + " environment variable before starting Quickshell."
+                        text: aiService._keyringAvailable
+                            ? "Open Settings to store your key, or set " + aiService._envVarForProvider(aiService.provider) + " in your environment."
+                            : "Set the " + aiService._envVarForProvider(aiService.provider) + " environment variable before starting Quickshell."
                         font.pixelSize: Theme.fontSizeSmall
                         font.family: Theme.fontFamily
                         color: Theme.surfaceTextMedium
@@ -801,7 +804,9 @@ Item {
                 StyledText {
                     anchors.fill: parent
                     anchors.margins: Theme.spacingM
-                    text: aiService.missingApiKey ? "API key required \u2014 set env var" : "Ask something\u2026  (Shift+Enter for newline)"
+                    text: aiService.missingApiKey
+                        ? (aiService._keyringAvailable ? "API key required \u2014 set in Settings" : "API key required \u2014 set env var")
+                        : "Ask something\u2026  (Shift+Enter for newline)"
                     font.pixelSize: Theme.fontSizeMedium
                     color: aiService.missingApiKey ? Theme.error : Theme.outlineButton
                     verticalAlignment: Text.AlignTop

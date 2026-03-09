@@ -10,6 +10,7 @@ Item {
     property string modelName: "Assistant"
     property bool expanded: false
     property bool canRegenerate: false
+    property bool isLocalProvider: false
     property real streamStartTime: 0
     property int streamTokenCount: 0
     signal regenerateRequested
@@ -96,6 +97,8 @@ Item {
                 streamStartTime: model.status === "streaming" ? root.streamStartTime : 0
                 streamTokenCount: model.status === "streaming" ? root.streamTokenCount : 0
                 streamStats: model.streamStats || ""
+                isLocalProvider: root.isLocalProvider
+                requestPayload: model.requestPayload || ""
                 onRegenerateRequested: root.regenerateRequested()
                 onVariantChangeRequested: newIndex => root.variantChangeRequested(model.id, newIndex)
                 onEditRequested: newText => root.editRequested(model.id, newText)
