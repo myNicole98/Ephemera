@@ -24,6 +24,7 @@ Item {
     property alias activeStreamId: streamingService.activeStreamId
     property alias streamStartTime: streamingService.streamStartTime
     property alias streamTokenCount: streamingService.streamTokenCount
+    property alias apiOutputTokens: streamingService._apiOutputTokens
     property alias lastRequestFailed: streamingService.lastRequestFailed
     property alias lastHttpStatus: streamingService.lastHttpStatus
 

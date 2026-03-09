@@ -13,6 +13,7 @@ Item {
     property bool isLocalProvider: false
     property real streamStartTime: 0
     property int streamTokenCount: 0
+    property int apiOutputTokens: 0
     signal regenerateRequested
     signal variantChangeRequested(string msgId, int newIndex)
     signal editRequested(string msgId, string newText)
@@ -96,6 +97,7 @@ Item {
                 variantCount: model.variantCount || 1
                 streamStartTime: model.status === "streaming" ? root.streamStartTime : 0
                 streamTokenCount: model.status === "streaming" ? root.streamTokenCount : 0
+                apiOutputTokens: model.status === "streaming" ? root.apiOutputTokens : 0
                 streamStats: model.streamStats || ""
                 isLocalProvider: root.isLocalProvider
                 requestPayload: model.requestPayload || ""

@@ -239,6 +239,71 @@ section("StreamParser.parseDelta — Gemini");
     assertEqual(r.content, "", "handles parts without text");
 })();
 
+section("StreamParser.parseDelta — outputTokens");
+(function() {
+    // OpenAI: usage.completion_tokens in final chunk
+    var json = JSON.stringify({
+        choices: [{ delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 50, completion_tokens: 120, total_tokens: 170 }
+    });
+    var r = StreamParser.parseDelta(json, "openai");
+    assertEqual(r.outputTokens, 120, "extracts OpenAI completion_tokens");
+    assertEqual(r.done, true, "done alongside usage");
+
+    // OpenAI: no usage in normal delta
+    json = JSON.stringify({
+        choices: [{ delta: { content: "hi" } }]
+    });
+    r = StreamParser.parseDelta(json, "openai");
+    assertEqual(r.outputTokens, 0, "no outputTokens in normal OpenAI delta");
+
+    // Ollama (OpenAI-compat): usage in final chunk
+    json = JSON.stringify({
+        choices: [{ delta: {}, finish_reason: "stop" }],
+        usage: { completion_tokens: 85 }
+    });
+    r = StreamParser.parseDelta(json, "ollama");
+    assertEqual(r.outputTokens, 85, "extracts Ollama completion_tokens");
+
+    // Anthropic: usage.output_tokens on message_delta
+    json = JSON.stringify({
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { output_tokens: 200 }
+    });
+    r = StreamParser.parseDelta(json, "anthropic");
+    assertEqual(r.outputTokens, 200, "extracts Anthropic output_tokens");
+    assertEqual(r.done, true, "done alongside Anthropic usage");
+
+    // Anthropic: no usage on content_block_delta
+    json = JSON.stringify({
+        type: "content_block_delta",
+        delta: { type: "text_delta", text: "hi" }
+    });
+    r = StreamParser.parseDelta(json, "anthropic");
+    assertEqual(r.outputTokens, 0, "no outputTokens in Anthropic content delta");
+
+    // Gemini: usageMetadata.candidatesTokenCount
+    json = JSON.stringify({
+        candidates: [{ content: { parts: [{ text: "done" }] } }],
+        usageMetadata: { promptTokenCount: 30, candidatesTokenCount: 450, totalTokenCount: 480 }
+    });
+    r = StreamParser.parseDelta(json, "gemini");
+    assertEqual(r.outputTokens, 450, "extracts Gemini candidatesTokenCount");
+    assertEqual(r.content, "done", "content alongside Gemini usage");
+
+    // Gemini: no usageMetadata
+    json = JSON.stringify({
+        candidates: [{ content: { parts: [{ text: "mid" }] } }]
+    });
+    r = StreamParser.parseDelta(json, "gemini");
+    assertEqual(r.outputTokens, 0, "no outputTokens when Gemini has no usageMetadata");
+
+    // Default: outputTokens is 0 on parse error
+    r = StreamParser.parseDelta("not json", "openai");
+    assertEqual(r.outputTokens, 0, "outputTokens is 0 on parse error");
+})();
+
 section("StreamParser.routeThinkTags");
 (function() {
     var r = StreamParser.routeThinkTags("hello world", "", false);

@@ -20,6 +20,7 @@ Item {
     property string pendingStdinBody: ""
     property real streamStartTime: 0
     property int streamTokenCount: 0
+    property int _apiOutputTokens: 0
     property bool _insideThinkTag: false
     property string _tagBuffer: ""
     property string _streamContent: ""
@@ -98,6 +99,7 @@ Item {
         lastRequestFailed = false;
         _streamContent = "";
         _streamThinking = "";
+        _apiOutputTokens = 0;
         _streamVariantIndex = variantIndex;
     }
 
@@ -129,6 +131,9 @@ Item {
             if (line.startsWith("data:")) {
                 var jsonPart = line.substring(5).trim();
                 var delta = StreamParser.parseDelta(jsonPart, provider);
+
+                if (delta.outputTokens > 0)
+                    _apiOutputTokens = delta.outputTokens;
 
                 if (delta.thinking) {
                     streamTokenCount++;
@@ -240,9 +245,12 @@ Item {
         if (streamStartTime === 0) return "";
         var elapsed = (Date.now() - streamStartTime) / 1000;
         var label = elapsed.toFixed(1) + "s";
-        if (streamTokenCount > 0 && elapsed > 0.5) {
-            var tps = streamTokenCount / elapsed;
-            label += " · " + tps.toFixed(1) + " tok/s";
+        // Prefer API-reported token count (accurate); fall back to delta count (approximate)
+        var tokens = _apiOutputTokens > 0 ? _apiOutputTokens : streamTokenCount;
+        if (tokens > 0 && elapsed > 0.5) {
+            var tps = tokens / elapsed;
+            var prefix = _apiOutputTokens > 0 ? "" : "~";
+            label += " · " + prefix + tps.toFixed(1) + " tok/s";
         }
         return label;
     }

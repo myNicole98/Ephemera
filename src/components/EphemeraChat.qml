@@ -126,6 +126,7 @@ Item {
                 isLocalProvider: aiService.isOllama
                 streamStartTime: aiService.streamStartTime
                 streamTokenCount: aiService.streamTokenCount
+                apiOutputTokens: aiService.apiOutputTokens
                 onRegenerateRequested: aiService.regenerate()
                 onVariantChangeRequested: (msgId, newIndex) => aiService.switchVariant(msgId, newIndex)
                 onEditRequested: (msgId, newText) => aiService.editAndRegenerate(msgId, newText)

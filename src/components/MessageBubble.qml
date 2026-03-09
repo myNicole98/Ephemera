@@ -26,6 +26,7 @@ Item {
     property string _editText: ""
     property real streamStartTime: 0
     property int streamTokenCount: 0
+    property int apiOutputTokens: 0
     property string streamStats: ""
     property bool isLocalProvider: false
     property string requestPayload: ""
@@ -665,9 +666,11 @@ Item {
                             onTriggered: {
                                 var elapsed = (Date.now() - root.streamStartTime) / 1000;
                                 var label = elapsed.toFixed(1) + "s";
-                                if (root.streamTokenCount > 0 && elapsed > 0.5) {
-                                    var tps = root.streamTokenCount / elapsed;
-                                    label += " · " + tps.toFixed(1) + " tok/s";
+                                var tokens = root.apiOutputTokens > 0 ? root.apiOutputTokens : root.streamTokenCount;
+                                if (tokens > 0 && elapsed > 0.5) {
+                                    var tps = tokens / elapsed;
+                                    var prefix = root.apiOutputTokens > 0 ? "" : "~";
+                                    label += " · " + prefix + tps.toFixed(1) + " tok/s";
                                 }
                                 parent._elapsedText = label;
                             }

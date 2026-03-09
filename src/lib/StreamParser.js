@@ -40,15 +40,21 @@ function splitLines(chunk, buffer) {
  * - Gemini: candidates[].content.parts[].text (supports array or single object).
  * - OpenAI/Ollama/Custom: choices[0].delta.content and .reasoning_content/.reasoning.
  *
+ * Also extracts token usage from provider-specific fields when available:
+ * - Anthropic: usage.output_tokens from message_delta events.
+ * - Gemini: usageMetadata.candidatesTokenCount from any chunk.
+ * - OpenAI/Ollama: usage.completion_tokens from the final chunk.
+ *
  * @param {string} jsonText - Raw JSON string (after stripping "data:" prefix).
  * @param {string} provider - Provider identifier ("anthropic"|"gemini"|"openai"|"ollama"|"custom").
- * @returns {{ content: string, thinking: string, done: boolean }}
+ * @returns {{ content: string, thinking: string, done: boolean, outputTokens: number }}
  *   content: assistant text delta (empty string if none).
  *   thinking: reasoning/thinking delta (empty string if none).
  *   done: true if the provider signaled stream completion.
+ *   outputTokens: completion token count from API (0 if not present in this event).
  */
 function parseDelta(jsonText, provider) {
-    var result = { content: "", thinking: "", done: false };
+    var result = { content: "", thinking: "", done: false, outputTokens: 0 };
     try {
         var data = JSON.parse(jsonText);
         if (provider === "anthropic") {
@@ -60,6 +66,9 @@ function parseDelta(jsonText, provider) {
             }
             if (data.type === "message_delta" && data.delta && data.delta.stop_reason)
                 result.done = true;
+            // Anthropic sends usage.output_tokens on message_delta
+            if (data.type === "message_delta" && data.usage && data.usage.output_tokens > 0)
+                result.outputTokens = data.usage.output_tokens;
         } else if (provider === "gemini") {
             var chunks = Array.isArray(data) ? data : [data];
             for (var ci = 0; ci < chunks.length; ci++) {
@@ -73,6 +82,10 @@ function parseDelta(jsonText, provider) {
                     if (cparts[pi] && cparts[pi].text)
                         result.content += cparts[pi].text;
                 }
+                // Gemini includes usageMetadata with token counts
+                var meta = chunks[ci].usageMetadata;
+                if (meta && meta.candidatesTokenCount > 0)
+                    result.outputTokens = meta.candidatesTokenCount;
             }
         } else {
             // OpenAI / Ollama (OpenAI-compat)
@@ -84,6 +97,9 @@ function parseDelta(jsonText, provider) {
             }
             if (choices && choices[0] && choices[0].finish_reason)
                 result.done = true;
+            // OpenAI/Ollama send usage in the final chunk
+            if (data.usage && data.usage.completion_tokens > 0)
+                result.outputTokens = data.usage.completion_tokens;
         }
     } catch (e) {
         console.warn("Ephemera: StreamParser.parseDelta parse error for", provider + ":", e);

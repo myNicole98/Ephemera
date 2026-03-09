@@ -178,7 +178,8 @@ function openaiRequest(payload, apiKey) {
     var body = {
         model: payload.model,
         messages: payload.messages,
-        stream: true
+        stream: true,
+        stream_options: { include_usage: true }
     };
     if (payload.max_tokens > 0) body.max_tokens = payload.max_tokens;
     if (temp !== undefined) body.temperature = temp;

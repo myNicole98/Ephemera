@@ -8,7 +8,7 @@ Ephemera is a DankMaterialShell daemon plugin (`"type": "daemon"`) providing an 
 
 Symlink into the parent Quickshell config's plugin path and reload the shell. Source lives in `src/`. Hot-reload with `dms restart` (full restart required — DMS caches compiled QML in-process; `dms ipc call plugins reload ephemera` does NOT reliably pick up all changes).
 
-Depends on parent config modules: `qs.Common` (Theme, StyledText), `qs.Widgets` (Dank* components), `qs.Services` (PluginService).
+Depends on parent config modules: `qs.Common` (Theme), `qs.Widgets` (Dank* components, StyledText), `qs.Services` (PluginService).
 
 Unit tests: `node tests/run_tests.js` — tests pure JS modules (Providers.js, StreamParser.js, Markdown.js, ChatExport.js, VariantStore.js, ErrorHints.js, Backoff.js).
 
