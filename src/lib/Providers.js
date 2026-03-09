@@ -288,9 +288,13 @@ var registry = {
         defaultUrl: "https://api.openai.com",
         needsKey: true,
         tempMin: 0.0, tempMax: 2.0, tempDefault: 1.0,
-        modelPlaceholder: "gpt-4o",
+        modelPlaceholder: "gpt-5.4",
         // o1/o3 reasoning models don't support temperature
-        tempUnsupportedModels: ["o1", "o3"]
+        tempUnsupportedModels: ["o1", "o3"],
+        models: [
+            "gpt-5.4", "gpt-5.4-pro", "gpt-5", "gpt-5-mini", "gpt-5-nano",
+            "gpt-4.1", "o4-mini", "o3", "o3-pro", "gpt-4o", "gpt-4o-mini"
+        ]
     },
     "anthropic": {
         name: "Anthropic",
@@ -298,7 +302,11 @@ var registry = {
         defaultUrl: "https://api.anthropic.com",
         needsKey: true,
         tempMin: 0.0, tempMax: 1.0, tempDefault: 1.0,
-        modelPlaceholder: "claude-sonnet-4-5"
+        modelPlaceholder: "claude-sonnet-4-6",
+        models: [
+            "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5",
+            "claude-sonnet-4-5", "claude-opus-4-5"
+        ]
     },
     "gemini": {
         name: "Gemini",
@@ -306,7 +314,12 @@ var registry = {
         defaultUrl: "https://generativelanguage.googleapis.com",
         needsKey: true,
         tempMin: 0.0, tempMax: 2.0, tempDefault: 1.0,
-        modelPlaceholder: "gemini-2.5-flash"
+        modelPlaceholder: "gemini-2.5-flash",
+        models: [
+            "gemini-3.1-pro-preview", "gemini-3-flash-preview",
+            "gemini-3.1-flash-lite-preview", "gemini-2.5-pro",
+            "gemini-2.5-flash", "gemini-2.5-flash-lite"
+        ]
     },
     "custom": {
         name: "custom provider",
@@ -324,6 +337,20 @@ function getProviderInfo(provider) {
 
 function getProviderNames() {
     return Object.keys(registry);
+}
+
+/**
+ * Get the hardcoded model list for a provider.
+ *
+ * Returns the models array from the registry entry, or an empty array
+ * if the provider has no predefined models (e.g. ollama, custom).
+ *
+ * @param {string} provider - Provider identifier.
+ * @returns {string[]} Array of model name strings.
+ */
+function getModelList(provider) {
+    var info = registry[provider];
+    return (info && info.models) ? info.models : [];
 }
 
 /**

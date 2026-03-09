@@ -179,11 +179,11 @@ RowLayout {
                     }
                 }
 
-                // Ollama model list (only shown when Ollama has discovered models)
+                // Model list (hardcoded for external providers, runtime for Ollama)
                 Column {
                     width: parent.width
                     spacing: 0
-                    visible: aiService.provider === "ollama" && aiService.availableModels.count > 0
+                    visible: aiService.modelChoices.length > 0
 
                     Rectangle {
                         width: parent.width
@@ -192,7 +192,7 @@ RowLayout {
                     }
 
                     Repeater {
-                        model: aiService.availableModels
+                        model: aiService.modelChoices
 
                         ItemDelegate {
                             width: parent.width
@@ -201,8 +201,8 @@ RowLayout {
                             leftPadding: Theme.spacingS
                             rightPadding: Theme.spacingS
                             onClicked: {
-                                aiService.model = model.name;
-                                aiService.saveSettingValue("model", model.name);
+                                aiService.model = modelData;
+                                aiService.saveSettingValue("model", modelData);
                                 modelSelectorPopup.close();
                             }
                             background: Rectangle {
@@ -212,11 +212,11 @@ RowLayout {
 
                             contentItem: StyledText {
                                 id: modelItemLabel
-                                text: model.name
+                                text: modelData
                                 font.pixelSize: Theme.fontSizeSmall
                                 font.family: Theme.monoFontFamily
-                                color: model.name === aiService.model ? Theme.primary : Theme.surfaceText
-                                font.weight: model.name === aiService.model ? Font.Medium : Font.Normal
+                                color: modelData === aiService.model ? Theme.primary : Theme.surfaceText
+                                font.weight: modelData === aiService.model ? Font.Medium : Font.Normal
                                 wrapMode: Text.NoWrap
                                 elide: Text.ElideRight
                                 anchors.verticalCenter: parent ? parent.verticalCenter : undefined

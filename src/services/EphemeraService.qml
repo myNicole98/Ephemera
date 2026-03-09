@@ -64,6 +64,17 @@ Item {
     readonly property real tempMax: temperatureRange.max
     readonly property real tempMin: temperatureRange.min
 
+    readonly property var modelChoices: {
+        var ollamaCount = availableModels.count;
+        if (provider === "ollama") {
+            var list = [];
+            for (var i = 0; i < ollamaCount; i++)
+                list.push(availableModels.get(i).name);
+            return list;
+        }
+        return Providers.getModelList(provider);
+    }
+
     readonly property bool isOllama: provider === "ollama"
     readonly property bool needsApiKey: provider !== "ollama"
     readonly property bool hasApiKey: resolveApiKey().length > 0

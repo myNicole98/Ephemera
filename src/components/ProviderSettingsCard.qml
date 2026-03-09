@@ -174,18 +174,13 @@ SettingsCard {
             color: Theme.surfaceVariantText
         }
 
-        // Dropdown for Ollama
+        // Dropdown (shown when provider has model choices)
         AccordionSection {
-            show: aiService.provider === "ollama" && aiService.availableModels.count > 0
+            show: aiService.modelChoices.length > 0
 
             DankDropdown {
                 width: parent.width
-                options: {
-                    var opts = [];
-                    for (var i = 0; i < aiService.availableModels.count; i++)
-                        opts.push(aiService.availableModels.get(i).name);
-                    return opts;
-                }
+                options: aiService.modelChoices
                 currentValue: aiService.model
                 onValueChanged: value => {
                     aiService.model = value;
@@ -194,21 +189,17 @@ SettingsCard {
             }
         }
 
-        // Text field for non-Ollama or no models
-        AccordionSection {
-            show: aiService.provider !== "ollama" || aiService.availableModels.count === 0
-
-            DankTextField {
-                width: parent.width
-                text: aiService.model
-                placeholderText: {
-                    var info = Providers.getProviderInfo(aiService.provider);
-                    return info.modelPlaceholder || "model-name";
-                }
-                onEditingFinished: {
-                    aiService.model = text.trim();
-                    aiService.saveSettingValue("model", text.trim());
-                }
+        // Text field for manual model entry (always visible)
+        DankTextField {
+            width: parent.width
+            text: aiService.model
+            placeholderText: {
+                var info = Providers.getProviderInfo(aiService.provider);
+                return info.modelPlaceholder || "model-name";
+            }
+            onEditingFinished: {
+                aiService.model = text.trim();
+                aiService.saveSettingValue("model", text.trim());
             }
         }
 

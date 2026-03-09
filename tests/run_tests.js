@@ -1270,6 +1270,41 @@ section("Backoff.maxDelayForAttempt");
     assertEqual(Backoff.maxDelayForAttempt(10, 2000, 30000), 30000, "10 errors = still capped");
 })();
 
+// ═════════════════════════════════════════════════════════════════
+// Providers.getModelList tests
+// ═════════════════════════════════════════════════════════════════
+
+section("Providers.getModelList");
+
+(function() {
+    var openai = Providers.getModelList("openai");
+    assert(Array.isArray(openai), "openai returns an array");
+    assert(openai.length > 0, "openai has models");
+    assert(openai.indexOf("gpt-5.4") >= 0, "openai includes gpt-5.4");
+
+    var anthropic = Providers.getModelList("anthropic");
+    assert(Array.isArray(anthropic), "anthropic returns an array");
+    assert(anthropic.length > 0, "anthropic has models");
+    assert(anthropic.indexOf("claude-sonnet-4-6") >= 0, "anthropic includes claude-sonnet-4-6");
+
+    var gemini = Providers.getModelList("gemini");
+    assert(Array.isArray(gemini), "gemini returns an array");
+    assert(gemini.length > 0, "gemini has models");
+    assert(gemini.indexOf("gemini-2.5-flash") >= 0, "gemini includes gemini-2.5-flash");
+
+    var ollama = Providers.getModelList("ollama");
+    assert(Array.isArray(ollama), "ollama returns an array");
+    assertEqual(ollama.length, 0, "ollama has no hardcoded models");
+
+    var custom = Providers.getModelList("custom");
+    assert(Array.isArray(custom), "custom returns an array");
+    assertEqual(custom.length, 0, "custom has no hardcoded models");
+
+    var unknown = Providers.getModelList("nonexistent");
+    assert(Array.isArray(unknown), "unknown provider returns an array");
+    assertEqual(unknown.length, 0, "unknown provider has no models");
+})();
+
 // ─── Summary ───────────────────────────────────────────────────
 
 console.log("\n" + "=".repeat(50));
