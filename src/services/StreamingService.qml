@@ -4,6 +4,7 @@ import Quickshell.Io
 import "../lib/StreamParser.js" as StreamParser
 import "../lib/ErrorHints.js" as ErrorHints
 import "../lib/Backoff.js" as Backoff
+import "../lib/Providers.js" as Providers
 
 Item {
     id: root
@@ -31,7 +32,7 @@ Item {
     property bool lastRequestFailed: false
 
     // --- Error backoff state ---
-    property real _lastErrorTime: 0
+    property real _cooldownUntil: 0
     property int _consecutiveErrors: 0
     readonly property int _backoffBaseMs: 2000
     readonly property int _backoffMaxMs: 30000
@@ -50,11 +51,11 @@ Item {
     // --- Public API ---
 
     function isInErrorCooldown() {
-        return Backoff.isInCooldown(_lastErrorTime, _consecutiveErrors, _backoffBaseMs, _backoffMaxMs);
+        return Backoff.isInCooldown(_cooldownUntil);
     }
 
     function resetErrorState() {
-        _lastErrorTime = 0;
+        _cooldownUntil = 0;
         _consecutiveErrors = 0;
     }
 
@@ -90,6 +91,22 @@ Item {
         chatFetcher.running = false;
     }
 
+    function reset() {
+        if (chatFetcher.running)
+            chatFetcher.running = false;
+        isStreaming = false;
+        activeStreamId = "";
+        streamStartTime = 0;
+        streamTokenCount = 0;
+        _apiOutputTokens = 0;
+        _streamContent = "";
+        _streamThinking = "";
+        _insideThinkTag = false;
+        _tagBuffer = "";
+        streamBuffer = "";
+        pendingStdinBody = "";
+    }
+
     function beginStream(streamId, variantIndex) {
         activeStreamId = streamId;
         isStreaming = true;
@@ -108,7 +125,8 @@ Item {
     }
 
     function exportToFile(markdownText, homeDir, filename) {
-        exportFileWriter.command = ["tee", filename];
+        // install -m 0600 sets restrictive permissions (owner-only read/write)
+        exportFileWriter.command = ["install", "-m", "0600", "/dev/stdin", filename];
         exportPendingBody = markdownText;
         exportFileWriter.stdinEnabled = true;
         exportFileWriter.running = true;
@@ -141,7 +159,7 @@ Item {
                 }
                 if (delta.content) {
                     streamTokenCount++;
-                    if (provider !== "anthropic" && provider !== "gemini") {
+                    if (!Providers.getProviderInfo(provider).hasNativeThinking) {
                         var tagResult = StreamParser.routeThinkTags(delta.content, _tagBuffer, _insideThinkTag);
                         _tagBuffer = tagResult.tagBuffer;
                         _insideThinkTag = tagResult.insideThinkTag;
@@ -226,7 +244,7 @@ Item {
         _lastFinalizedStreamId = streamId;
         isStreaming = false;
         activeStreamId = "";
-        _lastErrorTime = 0;
+        _cooldownUntil = 0;
         _consecutiveErrors = 0;
         streamFinalized(streamId, _buildStreamStats());
     }
@@ -237,7 +255,7 @@ Item {
         activeStreamId = "";
         lastRequestFailed = true;
         _consecutiveErrors++;
-        _lastErrorTime = Date.now();
+        _cooldownUntil = Backoff.computeCooldownUntil(_consecutiveErrors, _backoffBaseMs, _backoffMaxMs);
         streamError(streamId, message);
     }
 
@@ -256,8 +274,7 @@ Item {
     }
 
     function _providerDisplayName() {
-        var names = { "ollama": "Ollama", "openai": "OpenAI", "anthropic": "Anthropic", "gemini": "Gemini", "custom": "custom provider" };
-        return names[provider] || "custom provider";
+        return Providers.getProviderInfo(provider).name;
     }
 
     function _curlExitHint(exitCode) {

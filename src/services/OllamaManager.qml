@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "../lib/Providers.js" as Providers
 
 Item {
     id: root
@@ -78,12 +79,13 @@ Item {
 
     function discoverModels() {
         discoveryError = "";
+        if (!_isUrlSafe()) { discoveryError = "Invalid Ollama URL."; return; }
         modelDiscovery.command = ["curl", "-s", "--connect-timeout", "2", ollamaUrl + "/api/tags"];
         modelDiscovery.running = true;
     }
 
     function queryGpuStatus(modelName) {
-        if (!ollamaReady || !modelName) return;
+        if (!ollamaReady || !modelName || !_isUrlSafe()) return;
         _gpuQueryModel = modelName;
         gpuQuery.command = ["curl", "-s", "--connect-timeout", "2", ollamaUrl + "/api/ps"];
         gpuQuery.running = true;
@@ -99,6 +101,10 @@ Item {
         }
     }
 
+    function _isUrlSafe() {
+        return Providers.validateUrl(ollamaUrl).valid;
+    }
+
     // --- Internal ---
 
     function _kill() {
@@ -111,6 +117,7 @@ Item {
     }
 
     function ping() {
+        if (!_isUrlSafe()) return;
         ollamaPing.command = ["curl", "-s", "--connect-timeout", "2", ollamaUrl + "/api/tags"];
         ollamaPing.running = true;
     }

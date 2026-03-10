@@ -1201,6 +1201,16 @@ section("Providers.validateUrl");
 
     r = Providers.validateUrl("http://example.com/ok-path_name.ext/v2");
     assert(r.valid, "allows safe path characters (hyphens, underscores, dots)");
+
+    // Hostname must start with alphanumeric
+    r = Providers.validateUrl("http://.:8080");
+    assert(!r.valid, "rejects dot-only hostname");
+
+    r = Providers.validateUrl("http://:8080");
+    assert(!r.valid, "rejects empty hostname with port");
+
+    r = Providers.validateUrl("http://-bad.example.com");
+    assert(!r.valid, "rejects hostname starting with hyphen");
 })();
 
 // ═════════════════════════════════════════════════════════════════
@@ -1241,21 +1251,34 @@ section("Backoff.computeDelay");
     assert(d5 >= 1000 && d5 <= 2000, "null attempt treated as 0");
 })();
 
+section("Backoff.computeCooldownUntil");
+
+(function() {
+    // No errors — no cooldown
+    assert(Backoff.computeCooldownUntil(0) === 0, "no cooldown when consecutiveErrors is 0");
+
+    // Cooldown should be in the future
+    var until = Backoff.computeCooldownUntil(1, 2000, 30000);
+    assert(until > Date.now(), "cooldown until is in the future after error");
+    assert(until <= Date.now() + 2000, "cooldown until is at most base delay in the future for 1 error");
+
+    // Higher consecutive errors produce longer cooldowns (up to max)
+    var until5 = Backoff.computeCooldownUntil(5, 2000, 30000);
+    assert(until5 > Date.now(), "cooldown until is in the future for 5 errors");
+    assert(until5 <= Date.now() + 30000, "cooldown until is at most maxDelay in the future");
+})();
+
 section("Backoff.isInCooldown");
 
 (function() {
-    // No error state
-    assert(!Backoff.isInCooldown(0, 0), "no cooldown when lastErrorTime is 0");
-    assert(!Backoff.isInCooldown(Date.now(), 0), "no cooldown when consecutiveErrors is 0");
-    assert(!Backoff.isInCooldown(0, 3), "no cooldown when lastErrorTime is 0 even with errors");
+    // No cooldown
+    assert(!Backoff.isInCooldown(0), "no cooldown when cooldownUntil is 0");
 
-    // Just errored — should be in cooldown
-    assert(Backoff.isInCooldown(Date.now(), 1, 2000, 30000), "in cooldown immediately after error");
-    assert(Backoff.isInCooldown(Date.now(), 5, 2000, 30000), "in cooldown with 5 consecutive errors");
+    // Cooldown in the future — should be active
+    assert(Backoff.isInCooldown(Date.now() + 5000), "in cooldown when cooldownUntil is in the future");
 
-    // Long ago error — should NOT be in cooldown
-    assert(!Backoff.isInCooldown(Date.now() - 60000, 1, 2000, 30000), "not in cooldown after 60s for 1 error");
-    assert(!Backoff.isInCooldown(Date.now() - 60000, 3, 2000, 30000), "not in cooldown after 60s for 3 errors");
+    // Cooldown in the past — should NOT be active
+    assert(!Backoff.isInCooldown(Date.now() - 1000), "not in cooldown when cooldownUntil is in the past");
 })();
 
 section("Backoff.maxDelayForAttempt");

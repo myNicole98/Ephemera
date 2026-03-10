@@ -24,18 +24,31 @@ function computeDelay(attempt, baseDelayMs, maxDelayMs) {
 }
 
 /**
- * Determine whether a retry is still in the cooldown period.
+ * Compute the absolute timestamp at which cooldown expires for the current error.
  *
- * @param {number} lastErrorTime - Timestamp (ms) of the last error, 0 if no error.
- * @param {number} consecutiveErrors - Number of consecutive errors so far.
+ * Call this once when an error occurs and store the result. Subsequent cooldown
+ * checks compare Date.now() against the stored value — no re-randomization.
+ *
+ * @param {number} consecutiveErrors - Number of consecutive errors so far (after incrementing).
  * @param {number} [baseDelayMs=2000] - Base delay for backoff calculation.
  * @param {number} [maxDelayMs=30000] - Maximum delay cap.
+ * @returns {number} Absolute timestamp (ms) when cooldown ends.
+ */
+function computeCooldownUntil(consecutiveErrors, baseDelayMs, maxDelayMs) {
+    if (consecutiveErrors <= 0) return 0;
+    var delay = computeDelay(consecutiveErrors - 1, baseDelayMs, maxDelayMs);
+    return Date.now() + delay;
+}
+
+/**
+ * Determine whether a retry is still in the cooldown period.
+ *
+ * @param {number} cooldownUntil - Absolute timestamp (ms) when cooldown expires, 0 if no cooldown.
  * @returns {boolean} true if the cooldown period has NOT elapsed and retry should be blocked.
  */
-function isInCooldown(lastErrorTime, consecutiveErrors, baseDelayMs, maxDelayMs) {
-    if (lastErrorTime <= 0 || consecutiveErrors <= 0) return false;
-    var delay = computeDelay(consecutiveErrors - 1, baseDelayMs, maxDelayMs);
-    return (Date.now() - lastErrorTime) < delay;
+function isInCooldown(cooldownUntil) {
+    if (cooldownUntil <= 0) return false;
+    return Date.now() < cooldownUntil;
 }
 
 /**

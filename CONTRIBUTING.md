@@ -16,11 +16,17 @@ ephemera/
 ├── EphemeraDaemon.qml                   # Entry point — service init, per-screen panels, IPC handler
 ├── src/
 │   ├── services/
-│   │   ├── EphemeraService.qml          # Core state machine — messages, streaming, variants, curl
+│   │   ├── EphemeraService.qml          # Coordinator — messages, variants, orchestrates child services
+│   │   ├── StreamingService.qml         # Curl process, SSE parsing, stream state, error backoff
+│   │   ├── KeyringService.qml           # System keyring (D-Bus Secret Service) and env var key resolution
 │   │   └── OllamaManager.qml           # Ollama lifecycle — auto-start, ping, shutdown, model discovery
 │   ├── components/
 │   │   ├── EphemeraPanel.qml            # Wayland layer-shell PanelWindow — slide/expand animations
 │   │   ├── EphemeraChat.qml             # Main UI — header, message area, composer, overlays
+│   │   ├── ChatComposer.qml            # Auto-growing text input with send/stop/clear
+│   │   ├── ChatHeader.qml              # Header bar — model selector, actions, overflow menu
+│   │   ├── ChatToast.qml               # Ephemeral notification overlay
+│   │   ├── ClearChatDialog.qml         # Clear chat confirmation dialog
 │   │   ├── EphemeraSettings.qml         # Settings shell — delegates to card components below
 │   │   ├── ProviderSettingsCard.qml     # Provider/model selection with URL validation
 │   │   ├── ModelParametersCard.qml      # Temperature, max tokens, system prompt, timeout sliders
@@ -49,18 +55,24 @@ ephemera/
 ```
 EphemeraDaemon (entry point)
 │
-├─ EphemeraService (singleton, src/services/)
+├─ EphemeraService (coordinator, src/services/)
 │  ├─ Message ListModel (in-memory by default, optionally persisted)
 │  ├─ messageIndexMap (O(1) message lookups by ID)
 │  ├─ VariantStore.js (pure-function variant ops: save, get, evict)
-│  ├─ Stream buffers (_streamContent, _streamThinking, _streamVariantIndex)
 │  ├─ Provider settings (persisted via PluginService)
-│  ├─ Chat persistence (opt-in via persistChat toggle)
-│  ├─ ErrorHints.js (contextual HTTP/curl error messages)
-│  ├─ Curl process (stdin body, SSE streaming, 5MB buffer cap)
+│  ├─ Chat persistence (opt-in via persistChat toggle, debounced saves)
 │  └─ Providers.js (provider registry, curl command builders, URL validation)
 │
-├─ OllamaManager (singleton, src/services/)
+├─ StreamingService (child service, src/services/)
+│  ├─ Curl process (stdin config via -K -, SSE streaming, 5MB buffer cap)
+│  ├─ Stream buffers (_streamContent, _streamThinking, _streamVariantIndex)
+│  ├─ Backoff.js (exponential backoff with jitter for error cooldown)
+│  └─ ErrorHints.js (contextual HTTP/curl error messages)
+│
+├─ KeyringService (child service, src/services/)
+│  └─ API key resolution (system keyring via secret-tool → env var fallback)
+│
+├─ OllamaManager (child service, src/services/)
 │  └─ Ollama lifecycle (ping → auto-start → discover models, 15 retries)
 │
 └─ Variants (one per screen)
@@ -106,7 +118,7 @@ Pure JS modules in `src/lib/` have a Node.js test suite:
 node tests/run_tests.js
 ```
 
-This tests Providers.js, StreamParser.js, Markdown.js, ChatExport.js, VariantStore.js, and ErrorHints.js (319 tests). Run after any change to JS files.
+This tests Providers.js, StreamParser.js, Markdown.js, ChatExport.js, VariantStore.js, ErrorHints.js, and Backoff.js. Run after any change to JS files.
 
 ### Reload cycle
 
@@ -333,8 +345,8 @@ StyledText {
 
 These are non-negotiable design decisions:
 
-- **API keys from environment variables only.** Never add input fields for API keys. Never store them to disk.
-- **Curl body via stdin** (`-d @-`). Never pass the request body as a command-line argument — it would be visible in `/proc/cmdline`.
+- **API keys via system keyring or environment variables.** Keys are stored encrypted in the system keyring (D-Bus Secret Service) via `secret-tool`, or read from environment variables as fallback. Keys are never persisted by PluginService. The Settings panel provides a UI for storing/clearing keyring keys (via `KeyringService`).
+- **Curl config via stdin** (`-K -`). URL, auth headers, and request body are all passed through a curl config file on stdin — nothing appears in `/proc/cmdline` or `ps` output.
 - **Link scheme whitelist.** Only `http://` and `https://` links are opened. No `file://`, `javascript:`, or other schemes.
 - **HTML escaping in Markdown.js.** All user content is escaped before rendering as rich text. Code blocks, table cells, language labels, link text, and link URLs are all escaped independently.
 - **Gemini API key as header** (`x-goog-api-key`), not as a URL query parameter.
@@ -343,11 +355,11 @@ These are non-negotiable design decisions:
 
 ## Adding a new provider
 
-1. **`src/lib/Providers.js`** — Add a registry entry in `_providers` with `displayName`, `envVar`, `defaultUrl`, `modelPlaceholder`, and `buildRequest` function. The request builder returns `{ url, headers, body }`. Use the shared `extractSystemPrompt(payload.messages)` helper to separate system messages if the provider needs them in a different field.
+1. **`src/lib/Providers.js`** — Add a `registry` entry with `name`, `envVar`, `defaultUrl`, `needsKey`, `hasNativeThinking`, temperature range (`tempMin`/`tempMax`/`tempDefault`), `modelPlaceholder`, and optionally `models` (hardcoded list) and `tempUnsupportedModels`. Add a corresponding `buildRequest` case in `buildRequest()`. The request builder returns `{ url, headers, body }`. Use the shared `extractSystemPrompt(payload.messages)` helper to separate system messages if the provider needs them in a different field.
 
 2. **`src/lib/StreamParser.js`** — If the streaming format differs from OpenAI's SSE, add a case in `parseDelta()`.
 
-3. **`src/services/EphemeraService.qml`** — Add the provider to `resolveApiKey()` (map to env var name) and `updateBaseUrl()` (set default URL).
+3. **`src/services/KeyringService.qml`** — The provider's `envVar` from the registry is used automatically for env var fallback. No changes needed unless the provider has special key resolution logic.
 
 4. **UI auto-updates** — Settings cards use `Providers.getProviderNames()` and the registry, so the new provider appears automatically in dropdowns, API key status, and model placeholders.
 

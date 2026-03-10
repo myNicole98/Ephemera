@@ -97,11 +97,7 @@ Item {
                 var file = aiService.exportConversationToFile();
                 chatToast.show("Saved to " + file.split("/").pop());
             }
-            onClearRequested: {
-                aiService.clearChat();
-                composerArea.text = "";
-                composerArea.forceActiveFocus();
-            }
+            onClearRequested: root._handleClearRequest()
             onExpandToggled: root.expandToggled()
             onHideRequested: root.hideRequested()
         }
@@ -252,12 +248,14 @@ Item {
 
                     SequentialAnimation on opacity {
                         loops: Animation.Infinite
+                        running: root.visible && emptyState.visible
                         NumberAnimation { to: 0.75; duration: 1200; easing.type: Easing.InOutSine }
                         NumberAnimation { to: 0.5; duration: 1200; easing.type: Easing.InOutSine }
                     }
 
                     SequentialAnimation on scale {
                         loops: Animation.Infinite
+                        running: root.visible && emptyState.visible
                         NumberAnimation { to: 1.06; duration: 1200; easing.type: Easing.InOutSine }
                         NumberAnimation { to: 1.0; duration: 1200; easing.type: Easing.InOutSine }
                     }
@@ -284,6 +282,7 @@ Item {
 
                     SequentialAnimation on opacity {
                         loops: Animation.Infinite
+                        running: root.visible && emptyState.visible
                         NumberAnimation { to: 0.75; duration: 1600; easing.type: Easing.InOutSine }
                         NumberAnimation { to: 0.5; duration: 1600; easing.type: Easing.InOutSine }
                     }

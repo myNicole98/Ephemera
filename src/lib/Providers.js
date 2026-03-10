@@ -23,7 +23,7 @@ function validateUrl(url) {
         return { valid: false, error: "URL is too long (max 2048 characters)." };
     if (!/^https?:\/\//i.test(u))
         return { valid: false, error: "Must start with http:// or https://" };
-    if (!/^https?:\/\/[a-zA-Z0-9\-_.:]/.test(u))
+    if (!/^https?:\/\/[a-zA-Z0-9]/.test(u))
         return { valid: false, error: "Invalid hostname in URL." };
     // Reject control characters and characters unsafe in URLs (prevents injection via path)
     if (/[\x00-\x20\x7f<>"'{}|\\^`]/.test(u))
@@ -233,8 +233,11 @@ function anthropicRequest(payload, apiKey) {
 
 function geminiRequest(payload, apiKey) {
     var base = normalizeBaseUrl(payload.baseUrl || "https://generativelanguage.googleapis.com");
+    // Validate model name — prevent path traversal via user-supplied free text
+    var model = payload.model || "gemini-2.5-flash";
+    if (!/^[a-zA-Z0-9._:\-]+$/.test(model)) return null;
     // Key as header, NOT in URL — security fix
-    var url = base + "/v1beta/models/" + (payload.model || "gemini-2.5-flash")
+    var url = base + "/v1beta/models/" + model
         + ":streamGenerateContent?alt=sse";
     var safeKey = sanitizeApiKey(apiKey);
     if (!safeKey) return null;
@@ -279,6 +282,7 @@ var registry = {
         envVar: null,
         defaultUrl: "http://localhost:11434",
         needsKey: false,
+        hasNativeThinking: false,
         tempMin: 0.0, tempMax: 2.0, tempDefault: 0.8,
         modelPlaceholder: "llama3.2"
     },
@@ -287,6 +291,7 @@ var registry = {
         envVar: "OPENAI_API_KEY",
         defaultUrl: "https://api.openai.com",
         needsKey: true,
+        hasNativeThinking: false,
         tempMin: 0.0, tempMax: 2.0, tempDefault: 1.0,
         modelPlaceholder: "gpt-5.4",
         // o1/o3 reasoning models don't support temperature
@@ -301,6 +306,7 @@ var registry = {
         envVar: "ANTHROPIC_API_KEY",
         defaultUrl: "https://api.anthropic.com",
         needsKey: true,
+        hasNativeThinking: true,
         tempMin: 0.0, tempMax: 1.0, tempDefault: 1.0,
         modelPlaceholder: "claude-sonnet-4-6",
         models: [
@@ -313,6 +319,7 @@ var registry = {
         envVar: "GEMINI_API_KEY",
         defaultUrl: "https://generativelanguage.googleapis.com",
         needsKey: true,
+        hasNativeThinking: true,
         tempMin: 0.0, tempMax: 2.0, tempDefault: 1.0,
         modelPlaceholder: "gemini-2.5-flash",
         models: [
@@ -326,6 +333,7 @@ var registry = {
         envVar: "EPHEMERA_API_KEY",
         defaultUrl: "https://api.openai.com",
         needsKey: true,
+        hasNativeThinking: false,
         tempMin: 0.0, tempMax: 2.0, tempDefault: 0.7,
         modelPlaceholder: "model-name"
     }

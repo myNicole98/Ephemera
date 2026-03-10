@@ -21,6 +21,7 @@ Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plug
 - **Markdown rendering** — assistant responses rendered as rich text with code blocks, tables, lists, and blockquotes (deferred until streaming completes for performance)
 - **System prompt presets** — quick-select presets (Concise, Code Expert, Translator, Writing Editor) or write a custom system prompt
 - **Regenerate with variant pagination** — retry the last assistant response with a single click; previous responses are preserved and navigable with `< 1/2 >` pagination arrows (ChatGPT-style), even mid-stream; each variant remembers which model generated it, so switching models between regenerations shows the correct model chip per variant
+- **Edit and regenerate** — click the edit button on any user message to modify it; sending the edit removes all messages after it and regenerates from the new text
 - **Export conversation** — copy the full conversation as markdown to clipboard, or save to a `.md` file in your home directory
 - **Optional persistence** — messages are ephemeral by default; enable **Save Chat History** in settings to persist conversations across sessions (API keys are never stored)
 - **System keyring integration** — store API keys encrypted in GNOME Keyring / KDE Wallet / KeePassXC via `secret-tool`; env vars as fallback; keyring UI hidden gracefully when `secret-tool` is not installed
@@ -111,6 +112,7 @@ Open the slideout panel via your shell's configured keybind or action. Type a me
 | Up arrow | Recall last sent message (when composer is empty) |
 
 - **Copy** — hover over an assistant message to reveal the copy button (shows a checkmark on success)
+- **Edit** — hover over a user message to reveal the edit button; modify the message and press Enter to regenerate the conversation from that point (removes all subsequent messages)
 - **Regenerate** — hover over the last assistant message to reveal the regenerate button; after regenerating, use the `<` `>` arrows to navigate between response variants; each variant's model chip shows which model generated it
 - **Export** — click the copy icon in the header to copy the conversation as markdown, or the save icon to write it to `~/ephemera-chat-<timestamp>.md`
 - **Expand** — use the expand button to widen the panel (480px → 960px); model chips in the header and message bubbles expand to show full model names

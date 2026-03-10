@@ -56,7 +56,7 @@ Item {
                 renderedHtml = Markdown.markdownToHtml(root.text, themeColors);
             } catch (e) {
                 console.warn("Ephemera: markdown render error, falling back to plain text:", e);
-                renderedHtml = root.text;
+                renderedHtml = Markdown.escapeHtml(root.text);
             }
             _lastRenderedText = root.text;
         }

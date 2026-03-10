@@ -90,7 +90,7 @@ Item {
     }
 
     Component.onDestruction: {
-        try { saveChatHistory(); }
+        try { _commitChatHistory(); }
         catch (e) { console.warn("Ephemera: error saving chat on destruction:", e); }
         ollamaManager.cleanupOnDestruction();
     }
@@ -209,10 +209,9 @@ Item {
         if (provider === "ollama") {
             baseUrl = ollamaUrl;
         } else if (provider === "custom") {
-            baseUrl = String(PluginService.loadPluginData(pluginId, "customBaseUrl", "https://api.openai.com")).trim();
+            baseUrl = String(PluginService.loadPluginData(pluginId, "customBaseUrl", Providers.getProviderInfo("custom").defaultUrl)).trim();
         } else {
-            var info = Providers.getProviderInfo(provider);
-            baseUrl = info.defaultUrl;
+            baseUrl = Providers.getProviderInfo(provider).defaultUrl;
         }
     }
 
@@ -239,11 +238,10 @@ Item {
     // ─── Chat (ephemeral, in-memory only) ──────────────────────────
 
     function clearChat() {
+        streamingService.reset();
         messagesModel.clear();
         messageIndexMap = ({});
         variantStore = ({});
-        streamingService.isStreaming = false;
-        streamingService.activeStreamId = "";
         lastUserText = "";
         if (persistChat) {
             PluginService.savePluginData(pluginId, "chatHistory", "");
@@ -252,6 +250,11 @@ Item {
     }
 
     function saveChatHistory() {
+        if (!persistChat) return;
+        _chatSaveDebounce.restart();
+    }
+
+    function _commitChatHistory() {
         if (!persistChat) return;
         var msgs = [];
         for (var i = 0; i < messagesModel.count; i++) {
@@ -268,6 +271,13 @@ Item {
         PluginService.savePluginData(pluginId, "chatVariants", JSON.stringify(variantStore));
     }
 
+    Timer {
+        id: _chatSaveDebounce
+        interval: 150
+        repeat: false
+        onTriggered: root._commitChatHistory()
+    }
+
     function loadChatHistory() {
         if (!persistChat) return;
         try {
@@ -275,22 +285,34 @@ Item {
             if (!raw) return;
             var msgs = JSON.parse(raw);
             if (!Array.isArray(msgs) || msgs.length === 0) return;
-            messagesModel.clear();
-            messageIndexMap = ({});
+
+            // Parse into temp arrays first — only commit on full success
+            var tempEntries = [];
+            var tempIndexMap = {};
+            var tempLastUser = lastUserText;
             for (var i = 0; i < msgs.length; i++) {
                 var m = msgs[i];
                 var status = (m.status === "streaming") ? "ok" : (m.status || "ok");
-                messagesModel.append({
-                    role: m.role, content: m.content, thinking: m.thinking || "",
-                    id: m.id, timestamp: m.timestamp, status: status,
-                    variantIndex: m.variantIndex || 0, variantCount: m.variantCount || 1,
-                    modelName: m.modelName || "", streamStats: "", requestPayload: ""
-                });
-                messageIndexMap[m.id] = messagesModel.count - 1;
-                if (m.role === "user") lastUserText = m.content;
+                var entry = _createMessageEntry(m.role, m.content, m.id, m.timestamp, status, m.modelName);
+                entry.thinking = m.thinking || "";
+                entry.variantIndex = m.variantIndex || 0;
+                entry.variantCount = m.variantCount || 1;
+                tempEntries.push(entry);
+                tempIndexMap[m.id] = i;
+                if (m.role === "user") tempLastUser = m.content;
             }
+
+            var tempVariants = {};
             var vRaw = PluginService.loadPluginData(pluginId, "chatVariants", "");
-            if (vRaw) variantStore = JSON.parse(vRaw);
+            if (vRaw) tempVariants = JSON.parse(vRaw);
+
+            // Commit to model
+            messagesModel.clear();
+            for (var j = 0; j < tempEntries.length; j++)
+                messagesModel.append(tempEntries[j]);
+            messageIndexMap = tempIndexMap;
+            variantStore = tempVariants;
+            lastUserText = tempLastUser;
         } catch (e) {
             console.warn("Ephemera: failed to load chat history:", e);
         }
@@ -355,7 +377,7 @@ Item {
                 delete variantStore[removedMsg.id];
             messagesModel.remove(idx + 1);
         }
-        variantStore = variantStore;
+        variantStore = JSON.parse(JSON.stringify(variantStore));
         _rebuildIndexMap();
 
         lastUserText = newText.trim();
@@ -363,7 +385,7 @@ Item {
 
         var now = Date.now();
         var streamId = "assistant-" + now;
-        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1, modelName: model, streamStats: "", requestPayload: "" });
+        messagesModel.append(_createMessageEntry("assistant", "", streamId, now, "streaming", model));
         messageIndexMap[streamId] = messagesModel.count - 1;
 
         streamingService.beginStream(streamId, 0);
@@ -426,6 +448,15 @@ Item {
 
     // ─── Message helpers ───────────────────────────────────────────
 
+    function _createMessageEntry(role, content, id, timestamp, status, modelName) {
+        return {
+            role: role, content: content || "", thinking: "",
+            id: id, timestamp: timestamp, status: status || "ok",
+            variantIndex: 0, variantCount: 1,
+            modelName: modelName || "", streamStats: "", requestPayload: ""
+        };
+    }
+
     function _rebuildIndexMap() {
         var map = {};
         for (var i = 0; i < messagesModel.count; i++)
@@ -456,11 +487,11 @@ Item {
         var streamId = "assistant-" + now;
 
         var userId = "user-" + now;
-        messagesModel.append({ role: "user", content: text, thinking: "", timestamp: now, id: userId, status: "ok", variantIndex: 0, variantCount: 1, modelName: "", streamStats: "", requestPayload: "" });
+        messagesModel.append(_createMessageEntry("user", text, userId, now, "ok", ""));
         messageIndexMap[userId] = messagesModel.count - 1;
         lastUserText = text;
 
-        messagesModel.append({ role: "assistant", content: "", thinking: "", timestamp: now + 1, id: streamId, status: "streaming", variantIndex: 0, variantCount: 1, modelName: model, streamStats: "", requestPayload: "" });
+        messagesModel.append(_createMessageEntry("assistant", "", streamId, now + 1, "streaming", model));
         messageIndexMap[streamId] = messagesModel.count - 1;
 
         streamingService.beginStream(streamId, 0);
@@ -595,7 +626,7 @@ Item {
     }
 
     function _saveVariant(msgId, index, content, thinking, variantModel) {
-        var store = variantStore;
+        var store = JSON.parse(JSON.stringify(variantStore));
         var result = VariantStore.saveVariant(store, msgId, index, content, thinking, variantModel, maxVariantsPerMessage);
 
         if (result.evicted > 0) {
