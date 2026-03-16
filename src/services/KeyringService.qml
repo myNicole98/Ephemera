@@ -119,18 +119,17 @@ Item {
         running: false
         stdout: StdioCollector {
             id: keyringLookupCollector
-            waitForEnd: true
-        }
-        onExited: exitCode => {
-            root._keyringLookupPending = false;
-            if (exitCode === 0) {
-                var key = Providers.sanitizeApiKey(keyringLookupCollector.text);
+            onStreamFinished: {
+                var key = Providers.sanitizeApiKey(text);
                 if (key.length > 0) {
                     var cache = root._cloneCache();
                     cache[root._keyringLookupProvider] = key;
                     root._keyringCache = cache;
                 }
             }
+        }
+        onExited: exitCode => {
+            root._keyringLookupPending = false;
             if (root._keyringLookupDeferred) {
                 root._keyringLookupDeferred = false;
                 root.refreshKeyringKey();
