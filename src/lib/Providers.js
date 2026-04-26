@@ -166,6 +166,7 @@ function ollamaRequest(payload) {
     };
     if (payload.max_tokens > 0) body.max_tokens = payload.max_tokens;
     if (temp !== undefined) body.temperature = temp;
+    if (payload.tools && payload.tools.length > 0) body.tools = payload.tools;
     // No auth header for Ollama
     return { url: url, headers: [], body: JSON.stringify(body) };
 }

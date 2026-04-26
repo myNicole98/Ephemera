@@ -29,6 +29,13 @@ Item {
     property int _streamVariantIndex: 0
     property string _lastFinalizedStreamId: ""
     property bool _seenToolCalls: false
+    property var _pendingToolCalls: []
+    property var _allToolCalls: []
+    property var _toolResults: []
+    property var mcpService: null
+    property var _conversationMessages: []
+    property int _pendingCallId: -1
+    property var _pendingToolCallMeta: null
     property int lastHttpStatus: 0
     property bool lastRequestFailed: false
 
@@ -48,6 +55,7 @@ Item {
     signal streamFinalized(string streamId, string stats)
     signal streamError(string streamId, string message)
     signal streamCancelled(string streamId, string stats)
+    signal streamToolRoundReady(string streamId, var messages)
 
     // --- Public API ---
 
@@ -60,13 +68,15 @@ Item {
         _consecutiveErrors = 0;
     }
 
-    function launchCurl(curlResult, requestPayloadJson) {
+    function launchCurl(curlResult, messages) {
         if (chatFetcher.running) return;
 
         streamCollector.lastLen = 0;
         streamBuffer = "";
         _insideThinkTag = false;
         _tagBuffer = "";
+        if (messages)
+            _conversationMessages = messages;
         pendingStdinBody = curlResult.body;
         chatFetcher.stdinEnabled = true;
         chatFetcher.command = curlResult.cmd;
@@ -105,11 +115,13 @@ Item {
         _insideThinkTag = false;
         _tagBuffer = "";
         _seenToolCalls = false;
+        _pendingToolCalls = [];
+        _allToolCalls = [];
         streamBuffer = "";
         pendingStdinBody = "";
     }
 
-    function beginStream(streamId, variantIndex) {
+    function beginStream(streamId, variantIndex, messages) {
         activeStreamId = streamId;
         isStreaming = true;
         streamStartTime = 0;
@@ -121,6 +133,10 @@ Item {
         _apiOutputTokens = 0;
         _streamVariantIndex = variantIndex;
         _seenToolCalls = false;
+        _pendingToolCalls = [];
+        _allToolCalls = [];
+        _toolResults = [];
+        _conversationMessages = messages || [];
     }
 
     function exportToClipboard(markdownText) {
@@ -161,8 +177,12 @@ Item {
         if (delta.outputTokens > 0)
             _apiOutputTokens = delta.outputTokens;
 
-        if (delta.toolCalls) {
+        if (delta.toolCalls && delta.toolCalls.length > 0) {
             _seenToolCalls = true;
+            for (var tci = 0; tci < delta.toolCalls.length; tci++) {
+                _pendingToolCalls.push(delta.toolCalls[tci]);
+                _allToolCalls.push(delta.toolCalls[tci]);
+            }
         }
         if (delta.thinking) {
             streamTokenCount++;
@@ -183,8 +203,8 @@ Item {
             }
         }
         if (delta.done) {
-            if (_seenToolCalls && provider === "ollama") {
-                _seenToolCalls = false;
+            if (_pendingToolCalls.length > 0) {
+                _executeNextToolCall();
             } else {
                 _finalizeStream(activeStreamId);
             }
@@ -220,7 +240,7 @@ Item {
             return;
         }
 
-        if (isStreaming) {
+        if (isStreaming && !_seenToolCalls) {
             if (lastHttpStatus === 0 && _streamContent.length === 0) {
                 var providerName = _providerDisplayName();
                 var connMsg = provider === "ollama"
@@ -231,6 +251,69 @@ Item {
             }
             _finalizeStream(activeStreamId);
         }
+    }
+
+    function _executeNextToolCall() {
+        if (_pendingToolCalls.length === 0) {
+            _resumeWithToolResults();
+            return;
+        }
+        var toolCall = _pendingToolCalls.shift();
+        var toolName = toolCall.function ? toolCall.function.name : toolCall.name;
+        var toolArgs = toolCall.function ? toolCall.function.arguments : toolCall.arguments;
+        if (typeof toolArgs === "string") {
+            try { toolArgs = JSON.parse(toolArgs); } catch(e) { toolArgs = {}; }
+        }
+        if (!mcpService || !mcpService.isConnected) {
+            _toolResults.push({ tool_call_id: toolCall.id || toolName, role: "tool", content: "Error: MCP service not connected" });
+            _executeNextToolCall();
+            return;
+        }
+        _applyThinkingDelta(activeStreamId, "
+🔧 Calling: " + toolName + "
+");
+        var callId = mcpService.callTool(toolName, toolArgs);
+        _pendingCallId = callId;
+        _pendingToolCallMeta = { id: toolCall.id || ("call_" + callId), name: toolName };
+    }
+
+    function _onToolCallCompleted(callId, result) {
+        if (callId !== _pendingCallId) return;
+        _pendingCallId = -1;
+        var resultText = (typeof result === "string") ? result : JSON.stringify(result);
+        _applyThinkingDelta(activeStreamId, "✅ Result: " + resultText.substring(0, 200) + (resultText.length > 200 ? "…" : "") + "
+");
+        _toolResults.push({ role: "tool", tool_call_id: _pendingToolCallMeta.id, content: resultText });
+        _pendingToolCallMeta = null;
+        _executeNextToolCall();
+    }
+
+    function _onToolCallFailed(callId, error) {
+        if (callId !== _pendingCallId) return;
+        _pendingCallId = -1;
+        _applyThinkingDelta(activeStreamId, "❌ Error: " + error + "
+");
+        _toolResults.push({ role: "tool", tool_call_id: _pendingToolCallMeta ? _pendingToolCallMeta.id : String(callId), content: "Error: " + error });
+        _pendingToolCallMeta = null;
+        _executeNextToolCall();
+    }
+
+    function _resumeWithToolResults() {
+        if (_toolResults.length === 0) { _finalizeStream(activeStreamId); return; }
+        var updatedMessages = _conversationMessages.slice();
+        updatedMessages.push({
+            role: "assistant",
+            content: _streamContent || "",
+            tool_calls: _allToolCalls.slice()
+        });
+        for (var i = 0; i < _toolResults.length; i++)
+            updatedMessages.push(_toolResults[i]);
+        _conversationMessages = updatedMessages;
+        _toolResults = [];
+        _seenToolCalls = false;
+        _pendingToolCalls = [];
+        _allToolCalls = [];
+        streamToolRoundReady(activeStreamId, updatedMessages);
     }
 
     function _applyContentDelta(streamId, deltaText) {

@@ -1,6 +1,6 @@
 {
-  "id": "ephemera",
-  "name": "Ephemera",
+  "id": "ephemera-mcp",
+  "name": "Ephemera MCP",
   "description": "Ephemeral AI chat — ask quick questions, keep nothing",
   "version": "1.0.1",
   "author": "nicolasgarcia214",

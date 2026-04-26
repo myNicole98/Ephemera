@@ -44,6 +44,11 @@ Item {
     property string systemPrompt: ""
     property bool thinkingEnabled: false
     property bool panelOnLeft: false
+    // --- MCP ---
+    property bool mcpEnabled: false
+    property string mcpUrl: ""
+    property string mcpToken: ""
+    property alias mcpService: mcpServiceInstance
 
     // --- Ollama (delegated to OllamaManager) ---
     property alias availableModels: ollamaManager.availableModels
@@ -109,6 +114,15 @@ Item {
         provider: root.provider
     }
 
+    MCPService {
+        id: mcpServiceInstance
+        mcpUrl: root.mcpUrl
+        mcpToken: root.mcpToken
+        enabled: root.mcpEnabled
+        onToolCallCompleted: (callId, result) => streamingService._onToolCallCompleted(callId, result)
+        onToolCallFailed: (callId, error) => streamingService._onToolCallFailed(callId, error)
+    }
+
     StreamingService {
         id: streamingService
         provider: root.provider
@@ -120,6 +134,8 @@ Item {
         onStreamFinalized: (streamId, stats) => root._applyFinalize(streamId, stats)
         onStreamError: (streamId, message) => root._applyError(streamId, message)
         onStreamCancelled: (streamId, stats) => root._applyCancelled(streamId, stats)
+        mcpService: root.mcpEnabled ? mcpServiceInstance : null
+        onStreamToolRoundReady: (streamId, messages) => root._launchCurlWithMessages(messages)
     }
 
     OllamaManager {
@@ -188,6 +204,11 @@ Item {
         systemPrompt = String(PluginService.loadPluginData(pluginId, "systemPrompt", "")).trim();
         thinkingEnabled = PluginService.loadPluginData(pluginId, "thinkingEnabled", false) === true;
         panelOnLeft = PluginService.loadPluginData(pluginId, "panelOnLeft", false) === true;
+        mcpEnabled = PluginService.loadPluginData(pluginId, "mcpEnabled", false) === true;
+        mcpUrl = String(PluginService.loadPluginData(pluginId, "mcpUrl", "")).trim();
+        mcpToken = String(PluginService.loadPluginData(pluginId, "mcpToken", "")).trim();
+        if (mcpEnabled && mcpUrl && mcpToken)
+            mcpServiceInstance.connectToServer();
         unlimitedTokens = PluginService.loadPluginData(pluginId, "unlimitedTokens", false) === true;
         persistChat = PluginService.loadPluginData(pluginId, "persistChat", false) === true;
         ollamaManager.ollamaIdleMinutes = Number(PluginService.loadPluginData(pluginId, "ollamaIdleMinutes", 5)) || 5;
@@ -519,7 +540,7 @@ Item {
         var payloadIdx = findIndexById(activeStreamId);
         if (payloadIdx >= 0)
             messagesModel.setProperty(payloadIdx, "requestPayload", JSON.stringify(payload, null, 2));
-        streamingService.launchCurl(result);
+        streamingService.launchCurl(result, payload.messages);
     }
 
     function _buildPayload(latestText) {
@@ -543,7 +564,7 @@ Item {
         for (var j = 0; j < collected.length; j++)
             msgs.push(collected[j]);
 
-        return {
+        var payload = {
             provider: provider,
             baseUrl: baseUrl,
             model: model,
@@ -554,6 +575,18 @@ Item {
             timeout: timeout,
             thinkingEnabled: thinkingEnabled
         };
+        if (root.mcpEnabled && mcpServiceInstance.isConnected)
+            payload.tools = mcpServiceInstance.getOllamaTools();
+        return payload;
+    }
+
+    function _launchCurlWithMessages(messages) {
+        var payload = _buildPayload(lastUserText);
+        payload.messages = messages;
+        if (mcpEnabled && mcpServiceInstance.isConnected)
+            payload.tools = mcpServiceInstance.getOllamaTools();
+        var result = _buildCurlCommand(payload);
+        streamingService.launchCurl(result, messages);
     }
 
     function _buildCurlCommand(payload) {
