@@ -410,6 +410,17 @@ RowLayout {
     }
 
     DankActionButton {
+        iconName: aiService.panelOnLeft ? "last_page" : "first_page"
+        iconSize: Theme.iconSize - 4
+        iconColor: Theme.surfaceText
+        tooltipText: aiService.panelOnLeft ? "Move to right" : "Move to left"
+        onClicked: {
+            aiService.panelOnLeft = !aiService.panelOnLeft;
+            aiService.saveSettingValue("panelOnLeft", aiService.panelOnLeft);
+        }
+    }
+
+    DankActionButton {
         iconName: "close"
         iconSize: Theme.iconSize - 4
         iconColor: Theme.surfaceText

@@ -17,6 +17,7 @@ PanelWindow {
     property real expandedWidth: 960
     property Component content: null
     property real gap: 0
+    property bool panelOnLeft: false
 
     signal opened()
 
@@ -45,7 +46,8 @@ PanelWindow {
 
     anchors.top: true
     anchors.bottom: true
-    anchors.right: true
+    anchors.right: !panelOnLeft
+    anchors.left: panelOnLeft
 
     readonly property real activeWidth: expandable && expanded ? expandedWidth : panelWidth
     implicitWidth: expandable ? expandedWidth + gap : panelWidth + gap
@@ -61,7 +63,7 @@ PanelWindow {
 
     mask: Region {
         item: Rectangle {
-            x: root.width - alignedWidth
+            x: panelOnLeft ? 0 : root.width - alignedWidth
             y: 0
             width: alignedWidth
             height: root.height
@@ -72,15 +74,16 @@ PanelWindow {
         id: slide
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        anchors.right: parent.right
+        anchors.right: !panelOnLeft ? parent.right : undefined
+        anchors.left: panelOnLeft ? parent.left : undefined
         width: alignedWidth
 
-        property real offset: alignedWidth
+        property real offset: panelOnLeft ? -alignedWidth : alignedWidth
 
         Connections {
             target: root
             function onIsVisibleChanged() {
-                slide.offset = root.isVisible ? 0 : slide.width;
+                slide.offset = root.isVisible ? 0 : (panelOnLeft ? -slide.width : slide.width);
             }
         }
 
@@ -115,7 +118,8 @@ PanelWindow {
                 anchors.fill: parent
                 anchors.topMargin: root.gap
                 anchors.bottomMargin: root.gap
-                anchors.rightMargin: root.gap
+                anchors.rightMargin: panelOnLeft ? 0 : root.gap
+                anchors.leftMargin: panelOnLeft ? root.gap : 0
 
                 Rectangle {
                     anchors.fill: parent

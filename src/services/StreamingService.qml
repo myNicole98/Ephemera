@@ -28,6 +28,7 @@ Item {
     property string _streamThinking: ""
     property int _streamVariantIndex: 0
     property string _lastFinalizedStreamId: ""
+    property bool _seenToolCalls: false
     property int lastHttpStatus: 0
     property bool lastRequestFailed: false
 
@@ -103,6 +104,7 @@ Item {
         _streamThinking = "";
         _insideThinkTag = false;
         _tagBuffer = "";
+        _seenToolCalls = false;
         streamBuffer = "";
         pendingStdinBody = "";
     }
@@ -118,6 +120,7 @@ Item {
         _streamThinking = "";
         _apiOutputTokens = 0;
         _streamVariantIndex = variantIndex;
+        _seenToolCalls = false;
     }
 
     function exportToClipboard(markdownText) {
@@ -133,49 +136,64 @@ Item {
     }
 
     // --- Internal: stream processing ---
-
     function handleStreamChunk(chunk) {
-        var result = StreamParser.splitLines(chunk, streamBuffer);
-        streamBuffer = result.buffer;
+    var result = StreamParser.splitLines(chunk, streamBuffer);
+    streamBuffer = result.buffer;
 
-        for (var i = 0; i < result.lines.length; i++) {
-            var line = result.lines[i];
+    for (var i = 0; i < result.lines.length; i++) {
+        var line = result.lines[i];
 
-            if (line === "data: [DONE]" || line === "data:[DONE]") {
-                _finalizeStream(activeStreamId);
-                continue;
+        if (line === "data: [DONE]" || line === "data:[DONE]")
+            continue;
+
+        var jsonPart;
+        if (line.startsWith("data:")) {
+            jsonPart = line.substring(5).trim();
+        } else if (line.startsWith("{")) {
+            // Bare NDJSON (Ollama native /api/chat, etc.)
+            jsonPart = line;
+        } else {
+            continue;
+        }
+
+        var delta = StreamParser.parseDelta(jsonPart, provider);
+
+        if (delta.outputTokens > 0)
+            _apiOutputTokens = delta.outputTokens;
+
+        if (delta.toolCalls) {
+            _seenToolCalls = true;
+        }
+        if (delta.thinking) {
+            streamTokenCount++;
+            _applyThinkingDelta(activeStreamId, delta.thinking);
+        }
+        if (delta.content) {
+            streamTokenCount++;
+            if (!Providers.getProviderInfo(provider).hasNativeThinking) {
+                var tagResult = StreamParser.routeThinkTags(delta.content, _tagBuffer, _insideThinkTag);
+                _tagBuffer = tagResult.tagBuffer;
+                _insideThinkTag = tagResult.insideThinkTag;
+                for (var ti = 0; ti < tagResult.thinkingParts.length; ti++)
+                    _applyThinkingDelta(activeStreamId, tagResult.thinkingParts[ti]);
+                for (var ci = 0; ci < tagResult.contentParts.length; ci++)
+                    _applyContentDelta(activeStreamId, tagResult.contentParts[ci]);
+            } else {
+                _applyContentDelta(activeStreamId, delta.content);
             }
-
-            if (line.startsWith("data:")) {
-                var jsonPart = line.substring(5).trim();
-                var delta = StreamParser.parseDelta(jsonPart, provider);
-
-                if (delta.outputTokens > 0)
-                    _apiOutputTokens = delta.outputTokens;
-
-                if (delta.thinking) {
-                    streamTokenCount++;
-                    _applyThinkingDelta(activeStreamId, delta.thinking);
-                }
-                if (delta.content) {
-                    streamTokenCount++;
-                    if (!Providers.getProviderInfo(provider).hasNativeThinking) {
-                        var tagResult = StreamParser.routeThinkTags(delta.content, _tagBuffer, _insideThinkTag);
-                        _tagBuffer = tagResult.tagBuffer;
-                        _insideThinkTag = tagResult.insideThinkTag;
-                        for (var ti = 0; ti < tagResult.thinkingParts.length; ti++)
-                            _applyThinkingDelta(activeStreamId, tagResult.thinkingParts[ti]);
-                        for (var ci = 0; ci < tagResult.contentParts.length; ci++)
-                            _applyContentDelta(activeStreamId, tagResult.contentParts[ci]);
-                    } else {
-                        _applyContentDelta(activeStreamId, delta.content);
-                    }
-                }
-                if (delta.done)
-                    _finalizeStream(activeStreamId);
+        }
+        if (delta.done) {
+            if (_seenToolCalls && provider === "ollama") {
+                _seenToolCalls = false;
+            } else {
+                _finalizeStream(activeStreamId);
             }
         }
     }
+}
+
+
+
 
     function handleStreamFinished(text) {
         var parsed = StreamParser.extractHttpStatus(text);

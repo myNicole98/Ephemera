@@ -72,7 +72,7 @@ function openaiChatCompletionsUrl(baseUrl) {
     var b = normalizeBaseUrl(baseUrl || "https://api.openai.com");
     if (/\/v\d+$/.test(b))
         return b + "/chat/completions";
-    return b + "/v1/chat/completions";
+    return b + "/api/chat";
 }
 
 /**
@@ -155,8 +155,9 @@ function buildRequest(provider, payload, apiKey) {
 
 function ollamaRequest(payload) {
     // Use OpenAI-compatible endpoint for SSE streaming
-    var base = normalizeBaseUrl(payload.baseUrl || "http://localhost:11434");
-    var url = base + "/v1/chat/completions";
+    var base = normalizeBaseUrl(payload.baseUrl || "http://localhost:8000");
+    //var url = base + "/v1/chat/completions";
+    var url = base + "/api/chat";
     var temp = clampTemperature("ollama", payload.model, payload.temperature);
     var body = {
         model: payload.model,

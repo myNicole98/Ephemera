@@ -141,7 +141,7 @@ section("StreamParser.parseDelta — OpenAI/Ollama");
     json = JSON.stringify({
         choices: [{ delta: { reasoning: "deep thought" } }]
     });
-    r = StreamParser.parseDelta(json, "ollama");
+    r = StreamParser.parseDelta(json, "openai");
     assertEqual(r.thinking, "deep thought", "extracts reasoning field");
 
     r = StreamParser.parseDelta("not json at all", "openai");
@@ -257,13 +257,15 @@ section("StreamParser.parseDelta — outputTokens");
     r = StreamParser.parseDelta(json, "openai");
     assertEqual(r.outputTokens, 0, "no outputTokens in normal OpenAI delta");
 
-    // Ollama (OpenAI-compat): usage in final chunk
+    // Ollama native: eval_count in final chunk
     json = JSON.stringify({
-        choices: [{ delta: {}, finish_reason: "stop" }],
-        usage: { completion_tokens: 85 }
+        model: "gemma4",
+        message: { role: "assistant", content: "" },
+        done: true,
+        eval_count: 85
     });
     r = StreamParser.parseDelta(json, "ollama");
-    assertEqual(r.outputTokens, 85, "extracts Ollama completion_tokens");
+    assertEqual(r.outputTokens, 85, "extracts Ollama eval_count");
 
     // Anthropic: usage.output_tokens on message_delta
     json = JSON.stringify({
@@ -393,6 +395,83 @@ section("StreamParser.extractHttpStatus");
     assert(r.body.indexOf("line2") >= 0, "body contains second line");
 })();
 
+section("StreamParser.parseDelta — Ollama native /api/chat");
+(function() {
+    // Normal content chunk
+    var json = JSON.stringify({
+        model: "gemma4",
+        message: { role: "assistant", content: "Hello" },
+        done: false
+    });
+    var r = StreamParser.parseDelta(json, "ollama");
+    assertEqual(r.content, "Hello", "extracts Ollama native content");
+    assertEqual(r.done, false, "not done on normal chunk");
+    assertEqual(r.toolCalls, false, "no tool calls on normal chunk");
+
+    // Tool call chunk (MCP tool)
+    json = JSON.stringify({
+        model: "gemma4",
+        message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [{ function: { name: "web_search", arguments: { query: "ww2" } } }]
+        },
+        done: false
+    });
+    r = StreamParser.parseDelta(json, "ollama");
+    assertEqual(r.content, "", "tool call chunk has empty content");
+    assertEqual(r.done, false, "not done on tool call chunk");
+    assertEqual(r.toolCalls, true, "detects tool calls");
+
+    // Tool call with done: true (intermediate turn end)
+    json = JSON.stringify({
+        model: "gemma4",
+        message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [{ function: { name: "web_search", arguments: { query: "ww2" } } }]
+        },
+        done: true,
+        eval_count: 15
+    });
+    r = StreamParser.parseDelta(json, "ollama");
+    assertEqual(r.toolCalls, true, "detects tool calls even with done:true");
+    assertEqual(r.done, true, "done is true on tool call turn end");
+    assertEqual(r.outputTokens, 15, "extracts eval_count on tool call chunk");
+
+    // Final done chunk (actual response complete)
+    json = JSON.stringify({
+        model: "gemma4",
+        message: { role: "assistant", content: "" },
+        done: true,
+        eval_count: 200
+    });
+    r = StreamParser.parseDelta(json, "ollama");
+    assertEqual(r.content, "", "final done chunk has empty content");
+    assertEqual(r.done, true, "done is true on final chunk");
+    assertEqual(r.toolCalls, false, "no tool calls on final chunk");
+    assertEqual(r.outputTokens, 200, "extracts eval_count on final chunk");
+
+    // No tool_calls field at all
+    json = JSON.stringify({
+        model: "gemma4",
+        message: { role: "assistant", content: "normal" },
+        done: false
+    });
+    r = StreamParser.parseDelta(json, "ollama");
+    assertEqual(r.toolCalls, false, "no tool calls when field absent");
+
+    // Empty tool_calls array
+    json = JSON.stringify({
+        model: "gemma4",
+        message: { role: "assistant", content: "hi", tool_calls: [] },
+        done: false
+    });
+    r = StreamParser.parseDelta(json, "ollama");
+    assertEqual(r.toolCalls, false, "empty tool_calls array is not tool calls");
+    assertEqual(r.content, "hi", "content still extracted with empty tool_calls");
+})();
+
 section("StreamParser.extractNonStreamingText — OpenAI");
 (function() {
     var body = JSON.stringify({
@@ -479,8 +558,8 @@ section("Providers.openaiChatCompletionsUrl");
 (function() {
     assertEqual(
         Providers.openaiChatCompletionsUrl("https://api.openai.com"),
-        "https://api.openai.com/v1/chat/completions",
-        "appends /v1/chat/completions to base URL"
+        "https://api.openai.com/api/chat",
+        "appends /api/chat to base URL without version"
     );
     assertEqual(
         Providers.openaiChatCompletionsUrl("https://api.openai.com/v1"),
@@ -494,13 +573,13 @@ section("Providers.openaiChatCompletionsUrl");
     );
     assertEqual(
         Providers.openaiChatCompletionsUrl(""),
-        "https://api.openai.com/v1/chat/completions",
-        "defaults to OpenAI when empty"
+        "https://api.openai.com/api/chat",
+        "defaults to /api/chat when empty"
     );
     assertEqual(
         Providers.openaiChatCompletionsUrl(null),
-        "https://api.openai.com/v1/chat/completions",
-        "defaults to OpenAI when null"
+        "https://api.openai.com/api/chat",
+        "defaults to /api/chat when null"
     );
 })();
 

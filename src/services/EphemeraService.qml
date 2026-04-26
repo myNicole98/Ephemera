@@ -43,6 +43,7 @@ Item {
     property int timeout: 300
     property string systemPrompt: ""
     property bool thinkingEnabled: false
+    property bool panelOnLeft: false
 
     // --- Ollama (delegated to OllamaManager) ---
     property alias availableModels: ollamaManager.availableModels
@@ -186,6 +187,7 @@ Item {
         timeout = PluginService.loadPluginData(pluginId, "timeout", 300);
         systemPrompt = String(PluginService.loadPluginData(pluginId, "systemPrompt", "")).trim();
         thinkingEnabled = PluginService.loadPluginData(pluginId, "thinkingEnabled", false) === true;
+        panelOnLeft = PluginService.loadPluginData(pluginId, "panelOnLeft", false) === true;
         unlimitedTokens = PluginService.loadPluginData(pluginId, "unlimitedTokens", false) === true;
         persistChat = PluginService.loadPluginData(pluginId, "persistChat", false) === true;
         ollamaManager.ollamaIdleMinutes = Number(PluginService.loadPluginData(pluginId, "ollamaIdleMinutes", 5)) || 5;
