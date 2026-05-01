@@ -665,10 +665,37 @@ section("Providers.buildCurlCommand");
     var body = parseCurlConfigBody(r.body);
     assertEqual(body.model, "llama3", "body contains model");
     assertEqual(body.stream, true, "body has stream: true");
+    assertEqual(body.reasoning_effort, undefined, "default Ollama thinking omits reasoning_effort");
 
     // No secrets in /proc/cmdline — verify cmd has no auth headers or URLs
     var cmdStr = r.cmd.join(" ");
     assert(cmdStr.indexOf("localhost:11434") < 0, "URL not in cmd args (hidden in config)");
+
+    payload.ollamaThinkingMode = "none";
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assertEqual(body.reasoning_effort, "none", "Ollama thinking off maps to reasoning_effort none");
+
+    payload.ollamaThinkingMode = "low";
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assertEqual(body.reasoning_effort, "low", "Ollama low thinking maps to reasoning_effort low");
+
+    payload.ollamaThinkingMode = "medium";
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assertEqual(body.reasoning_effort, "medium", "Ollama medium thinking maps to reasoning_effort medium");
+
+    payload.ollamaThinkingMode = "high";
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assertEqual(body.reasoning_effort, "high", "Ollama high thinking maps to reasoning_effort high");
+
+    payload.ollamaThinkingMode = "invalid";
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assertEqual(body.reasoning_effort, undefined, "invalid Ollama thinking mode falls back to default");
+    payload.ollamaThinkingMode = "default";
 
     // OpenAI (key required)
     payload.provider = "openai";

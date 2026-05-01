@@ -83,6 +83,7 @@ All settings are configurable from the in-app settings panel (tune icon):
 - **Provider** — ollama, openai, anthropic, gemini, or custom
 - **Model** — auto-discovered dropdown for Ollama, free-text for others
 - **Ollama URL** — defaults to `http://localhost:11434`
+- **Ollama Thinking** — Default, Off, Low, Medium, or High reasoning effort for Ollama models that support it; Off requests no thinking
 - **Custom Base URL** — for OpenAI-compatible endpoints (validated: http/https only, valid hostname, max 2048 chars)
 - **Extended Thinking** — toggle for Anthropic provider; enables extended thinking (forces temperature to 1.0, allocates 80% of max tokens as thinking budget)
 - **System Prompt** — prepended to every request; quick-select presets available or enter custom text

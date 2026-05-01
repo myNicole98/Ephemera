@@ -158,6 +158,7 @@ function ollamaRequest(payload) {
     var base = normalizeBaseUrl(payload.baseUrl || "http://localhost:11434");
     var url = base + "/v1/chat/completions";
     var temp = clampTemperature("ollama", payload.model, payload.temperature);
+    var thinkingMode = normalizeOllamaThinkingMode(payload.ollamaThinkingMode);
     var body = {
         model: payload.model,
         messages: payload.messages,
@@ -165,8 +166,22 @@ function ollamaRequest(payload) {
     };
     if (payload.max_tokens > 0) body.max_tokens = payload.max_tokens;
     if (temp !== undefined) body.temperature = temp;
+    if (thinkingMode !== "default") body.reasoning_effort = thinkingMode;
     // No auth header for Ollama
     return { url: url, headers: [], body: JSON.stringify(body) };
+}
+
+function normalizeOllamaThinkingMode(mode) {
+    var m = String(mode || "default").trim().toLowerCase();
+    switch (m) {
+    case "none":
+    case "low":
+    case "medium":
+    case "high":
+        return m;
+    default:
+        return "default";
+    }
 }
 
 function openaiRequest(payload, apiKey) {

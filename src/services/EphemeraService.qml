@@ -34,6 +34,7 @@ Item {
     // --- Provider settings ---
     property string provider: "ollama"
     property string ollamaUrl: "http://localhost:11434"
+    property string ollamaThinkingMode: "default"
     property string baseUrl: "http://localhost:11434"
     property string model: ""
     property real temperature: 0.7
@@ -179,6 +180,7 @@ Item {
 
         provider = String(PluginService.loadPluginData(pluginId, "provider", "ollama")).trim() || "ollama";
         ollamaUrl = String(PluginService.loadPluginData(pluginId, "ollamaUrl", "http://localhost:11434")).trim();
+        ollamaThinkingMode = Providers.normalizeOllamaThinkingMode(PluginService.loadPluginData(pluginId, "ollamaThinkingMode", "default"));
         model = String(PluginService.loadPluginData(pluginId, "model", "")).trim();
         temperature = PluginService.loadPluginData(pluginId, "temperature", 0.7);
         maxTokens = PluginService.loadPluginData(pluginId, "maxTokens", 4096);
@@ -550,6 +552,7 @@ Item {
             messages: msgs,
             stream: true,
             timeout: timeout,
+            ollamaThinkingMode: ollamaThinkingMode,
             thinkingEnabled: thinkingEnabled
         };
     }
