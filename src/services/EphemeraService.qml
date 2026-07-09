@@ -154,10 +154,17 @@ Item {
         onStreamFinalized: (streamId, stats) => root._applyFinalize(streamId, stats)
         onStreamError: (streamId, message) => root._applyError(streamId, message)
         onStreamCancelled: (streamId, stats) => root._applyCancelled(streamId, stats)
-        mcpService: root.mcpToolRequestsAllowed ? mcpServiceInstance : null
+        mcpConnected: mcpServiceInstance.isConnected
+        mcpTools: mcpServiceInstance.tools
         toolCallsAllowed: root.mcpToolRequestsAllowed
-        requireToolApproval: true
         approvedToolContracts: root.activeMcpToolApprovals
+        onMcpToolCallRequested: (toolName, toolArguments, approvedContracts) => {
+            var callId = mcpServiceInstance.callTool(toolName, toolArguments, approvedContracts);
+            streamingService.toolCallStarted(toolName, callId);
+        }
+        onMcpToolCallCancellationRequested: (callId, reason) => {
+            mcpServiceInstance.cancelRequest(callId, reason);
+        }
         onStreamToolRoundReady: (streamId, messages) => root._launchCurlWithMessages(messages)
     }
 
@@ -283,6 +290,29 @@ Item {
     function saveSettingValue(key, value) {
         _settingsReloadDebounce.restart();
         PluginService.savePluginData(pluginId, key, value);
+    }
+
+    function togglePanelSide() {
+        panelOnLeft = !panelOnLeft;
+        saveSettingValue("panelOnLeft", panelOnLeft);
+    }
+
+    function setMcpEnabled(enabled) {
+        mcpEnabled = enabled === true && isOllama;
+        saveSettingValue("mcpEnabled", mcpEnabled);
+        if (mcpEnabled)
+            mcpServiceInstance.connectToServer();
+        else
+            mcpServiceInstance.disconnectFromServer();
+    }
+
+    function reconnectMcp() {
+        if (isOllama && mcpEnabled)
+            mcpServiceInstance.reconnectToServer();
+    }
+
+    function disconnectMcp() {
+        mcpServiceInstance.disconnectFromServer();
     }
 
     function setMcpToolRequestsAllowed(enabled) {

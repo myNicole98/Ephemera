@@ -46,7 +46,7 @@ SettingsCard {
         }
 
         StyledText {
-            text: "MCP Tools"
+            text: "MCP Tools · Experimental"
             font.pixelSize: Theme.fontSizeLarge
             font.weight: Font.Medium
             color: Theme.surfaceText
@@ -83,7 +83,7 @@ SettingsCard {
                 }
 
                 StyledText {
-                    text: "Connect an MCP bridge for Ollama tool calling"
+                    text: "Opt-in bridge support for Ollama. Expect transport and OAuth compatibility issues."
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.surfaceVariantText
                     wrapMode: Text.WordWrap
@@ -96,14 +96,7 @@ SettingsCard {
                 checked: aiService.mcpEnabled
                 enabled: aiService.isOllama
                 anchors.verticalCenter: parent.verticalCenter
-                onToggled: {
-                    aiService.mcpEnabled = checked;
-                    aiService.saveSettingValue("mcpEnabled", checked);
-                    if (checked && aiService.isOllama)
-                        aiService.mcpService.connectToServer();
-                    else
-                        aiService.mcpService.disconnectFromServer();
-                }
+                onToggled: aiService.setMcpEnabled(checked)
             }
         }
 
@@ -243,7 +236,7 @@ SettingsCard {
                     }
                     onClicked: {
                         if (root.commitMcpUrl())
-                            aiService.mcpService.reconnectToServer();
+                            aiService.reconnectMcp();
                     }
                 }
 
@@ -254,7 +247,7 @@ SettingsCard {
                     enabled: aiService.mcpService.isConnected || aiService.mcpService.connecting
                     backgroundColor: Theme.error
                     textColor: Theme.onPrimary
-                    onClicked: aiService.mcpService.disconnectFromServer()
+                    onClicked: aiService.disconnectMcp()
                 }
             }
         }
@@ -373,62 +366,144 @@ SettingsCard {
                         model: aiService.mcpService.tools
 
                         Rectangle {
+                            id: toolCard
                             required property var modelData
+                            property bool reviewingContract: false
+                            readonly property bool contractApproved: aiService.isMcpToolApproved(modelData.name)
                             width: parent.width
-                            height: toolRow.implicitHeight + Theme.spacingS * 2
+                            height: toolCardColumn.implicitHeight + Theme.spacingS * 2
                             radius: Theme.cornerRadius
                             color: Theme.withAlpha(Theme.surfaceContainerHigh, 0.5)
 
-                            Row {
-                                id: toolRow
+                            Column {
+                                id: toolCardColumn
                                 anchors.left: parent.left
                                 anchors.right: parent.right
                                 anchors.verticalCenter: parent.verticalCenter
                                 anchors.margins: Theme.spacingS
                                 spacing: Theme.spacingS
 
-                                DankIcon {
-                                    name: "functions"
-                                    size: 14
-                                    color: Theme.primary
-                                    anchors.top: parent.top
-                                    anchors.topMargin: 2
+                                Row {
+                                    width: parent.width
+                                    spacing: Theme.spacingS
+
+                                    DankIcon {
+                                        name: "functions"
+                                        size: 14
+                                        color: Theme.primary
+                                        anchors.top: parent.top
+                                        anchors.topMargin: 2
+                                    }
+
+                                    Column {
+                                        width: parent.width - 14 - contractButton.width - parent.spacing * 2
+                                        spacing: 2
+
+                                        StyledText {
+                                            text: modelData.name
+                                            textFormat: Text.PlainText
+                                            font.pixelSize: Theme.fontSizeSmall
+                                            font.family: Theme.monoFontFamily
+                                            font.weight: Font.Medium
+                                            color: Theme.surfaceText
+                                            width: parent.width
+                                            elide: Text.ElideRight
+                                        }
+
+                                        StyledText {
+                                            text: Mcp.formatReviewText(modelData.description || "")
+                                            textFormat: Text.PlainText
+                                            font.pixelSize: Theme.fontSizeSmall
+                                            color: Theme.surfaceVariantText
+                                            wrapMode: Text.WordWrap
+                                            maximumLineCount: 4
+                                            elide: Text.ElideRight
+                                            width: parent.width
+                                            visible: text.length > 0
+                                        }
+                                    }
+
+                                    DankButton {
+                                        id: contractButton
+                                        text: toolCard.contractApproved ? "Approved" : "Review"
+                                        iconName: toolCard.contractApproved ? "verified" : "policy"
+                                        enabled: aiService.isOllama && aiService.mcpService.isConnected
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        onClicked: toolCard.reviewingContract = !toolCard.reviewingContract
+                                    }
                                 }
 
-                                Column {
-                                    width: parent.width - 14 - toolAllowedToggle.width - parent.spacing * 2
-                                    spacing: 2
+                                AccordionSection {
+                                    show: toolCard.reviewingContract
 
                                     StyledText {
-                                        text: modelData.name
-                                        textFormat: Text.PlainText
+                                        width: parent.width
+                                        text: "Exact approval contract"
                                         font.pixelSize: Theme.fontSizeSmall
-                                        font.family: Theme.monoFontFamily
                                         font.weight: Font.Medium
                                         color: Theme.surfaceText
+                                    }
+
+                                    Rectangle {
                                         width: parent.width
-                                        elide: Text.ElideRight
+                                        height: 220
+                                        radius: Theme.cornerRadius * 0.75
+                                        color: Theme.withAlpha(Theme.surfaceContainerHighest, 0.75)
+                                        border.color: Theme.outlineMedium
+                                        border.width: 1
+                                        clip: true
+
+                                        ScrollView {
+                                            anchors.fill: parent
+                                            anchors.margins: Theme.spacingS
+                                            clip: true
+                                            ScrollBar.horizontal.policy: ScrollBar.AsNeeded
+
+                                            TextArea {
+                                                width: parent.width
+                                                text: Mcp.formatToolContract(modelData)
+                                                readOnly: true
+                                                selectByMouse: true
+                                                wrapMode: Text.NoWrap
+                                                textFormat: Text.PlainText
+                                                font.pixelSize: Theme.fontSizeSmall
+                                                font.family: Theme.monoFontFamily
+                                                color: Theme.surfaceText
+                                                background: null
+                                                padding: 0
+                                            }
+                                        }
                                     }
 
                                     StyledText {
-                                        text: modelData.description || ""
+                                        width: parent.width
+                                        text: "Approval is invalidated automatically if any displayed field changes. Every invocation still requires confirmation."
                                         textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontSizeSmall
                                         color: Theme.surfaceVariantText
                                         wrapMode: Text.WordWrap
-                                        maximumLineCount: 4
-                                        elide: Text.ElideRight
-                                        width: parent.width
-                                        visible: text.length > 0
                                     }
-                                }
 
-                                Switch {
-                                    id: toolAllowedToggle
-                                    checked: aiService.isMcpToolApproved(modelData.name)
-                                    enabled: aiService.isOllama && aiService.mcpService.isConnected
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    onToggled: aiService.setMcpToolApproved(modelData.name, checked)
+                                    Row {
+                                        anchors.right: parent.right
+                                        spacing: Theme.spacingS
+
+                                        DankButton {
+                                            text: "Cancel"
+                                            onClicked: toolCard.reviewingContract = false
+                                        }
+
+                                        DankButton {
+                                            text: toolCard.contractApproved ? "Revoke" : "Approve exact contract"
+                                            iconName: toolCard.contractApproved ? "remove_moderator" : "verified_user"
+                                            backgroundColor: toolCard.contractApproved ? Theme.error : Theme.primary
+                                            textColor: Theme.onPrimary
+                                            onClicked: {
+                                                aiService.setMcpToolApproved(modelData.name, !toolCard.contractApproved);
+                                                toolCard.reviewingContract = false;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }

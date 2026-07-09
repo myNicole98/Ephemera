@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "../lib/Mcp.js" as Mcp
+import "../lib/McpResult.js" as McpResult
 import "../lib/Providers.js" as Providers
 
 Item {
@@ -24,6 +25,7 @@ Item {
     property bool _initialized: false
     property string _negotiatedProtocolVersion: ""
     property bool _listingTools: false
+    property bool _toolRefreshPending: false
     property bool _stopRequested: false
     property bool _reconnectPending: false
     property bool _versionProbeCancelled: false
@@ -39,8 +41,8 @@ Item {
     readonly property int _maxTools: 128
     readonly property int _maxToolsJsonChars: 1048576
     readonly property int _maxCursorChars: 4096
-    readonly property string _minimumBridgeVersion: "0.1.16"
-    readonly property string _maximumBridgeVersionExclusive: "0.2.0"
+    readonly property string _minimumBridgeVersion: "0.1.38"
+    readonly property string _maximumBridgeVersionExclusive: "0.1.39"
     readonly property string _preferredProtocolVersion: "2025-11-25"
     readonly property var _supportedProtocolVersions: [
         "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"
@@ -131,9 +133,11 @@ Item {
         Qt.callLater(connectToServer);
     }
 
-    // Call a tool by name with validated object arguments. Returns the request id.
-    function callTool(toolName, args) {
-        if (!isConnected || _listingTools || !_findTool(toolName))
+    // Call an exactly approved tool contract with validated object arguments.
+    function callTool(toolName, args, approvedKeys) {
+        var tool = _findTool(toolName);
+        if (!isConnected || _listingTools || !tool
+                || !Mcp.isToolApproved(tool, approvedKeys))
             return -1;
         if (!args || typeof args !== "object" || Array.isArray(args))
             return -1;
@@ -141,6 +145,11 @@ Item {
         var id = _nextId++;
         _pendingRequests[id] = {
             resolve: function(result) {
+                var validation = McpResult.validateToolResult(tool, result);
+                if (!validation.valid) {
+                    root.toolCallFailed(id, validation.error);
+                    return;
+                }
                 var text = Mcp.formatToolResult(result);
                 if (Mcp.isToolError(result))
                     root.toolCallFailed(id, text || "MCP tool reported an error.");
@@ -156,7 +165,7 @@ Item {
             id: id,
             method: "tools/call",
             params: {
-                name: toolName,
+                name: tool.name,
                 arguments: args
             }
         };
@@ -240,7 +249,7 @@ Item {
         bridgeVersionProbe.running = true;
     }
 
-    function _handleVersionProbeFinished(output) {
+    function _handleVersionProbeFinished(exitCode, output) {
         bridgeVersionTimer.stop();
         if (_versionProbeCancelled) {
             _versionProbeCancelled = false;
@@ -248,15 +257,20 @@ Item {
             return;
         }
 
+        if (exitCode !== 0) {
+            _dependencyError("Could not inspect the global mcp-remote installation.");
+            return;
+        }
+
         var packageInfo = Mcp.extractNpmPackageInfo(output, "mcp-remote");
         var version = packageInfo.version;
         if (!version || !packageInfo.executable) {
-            _dependencyError("mcp-remote is not installed globally in a supported npm layout. Install a 0.1.x release at version 0.1.16 or newer.");
+            _dependencyError("mcp-remote is not installed globally in a supported npm layout. Install the reviewed 0.1.38 release.");
             return;
         }
         if (!Mcp.isVersionInRange(version, _minimumBridgeVersion,
                                   _maximumBridgeVersionExclusive)) {
-            _dependencyError("mcp-remote " + version + " is unsupported. Use a stable 0.1.x release from " + _minimumBridgeVersion + " onward.");
+            _dependencyError("mcp-remote " + version + " is unsupported. Install the reviewed 0.1.38 release.");
             return;
         }
 
@@ -282,6 +296,7 @@ Item {
         _pendingRequests = ({});
         _nextId = 1;
         _listingTools = false;
+        _toolRefreshPending = false;
         _bridgeDiagnostics = "";
         _readBuffer = "";
         tools = [];
@@ -315,13 +330,7 @@ Item {
     }
 
     function _findTool(toolName) {
-        var name = String(toolName || "").trim();
-        if (!name) return null;
-        for (var i = 0; i < tools.length; i++) {
-            if (tools[i] && String(tools[i].name || "").trim() === name)
-                return tools[i];
-        }
-        return null;
+        return Mcp.findTool(tools, toolName);
     }
 
     function _abortConnection(message) {
@@ -346,6 +355,7 @@ Item {
         connecting = false;
         _initialized = false;
         _listingTools = false;
+        _toolRefreshPending = false;
         _negotiatedProtocolVersion = "";
         _readBuffer = "";
         tools = [];
@@ -452,8 +462,13 @@ Item {
     }
 
     function _handleNotification(method, params) {
-        if (method === "notifications/tools/list_changed" && !_listingTools)
-            _beginListTools();
+        if (method !== "notifications/tools/list_changed")
+            return;
+        if (_listingTools) {
+            _toolRefreshPending = true;
+            return;
+        }
+        _beginListTools();
     }
 
     function _sendInitialize() {
@@ -566,10 +581,20 @@ Item {
                     return;
                 }
 
-                var supported = Mcp.sanitizeTools(page.tools);
+                var sanitized = Mcp.sanitizeTools(page.tools);
+                var supported = [];
+                for (var ti = 0; ti < sanitized.length; ti++) {
+                    if (!McpResult.outputSchemaSupportError(sanitized[ti].outputSchema))
+                        supported.push(sanitized[ti]);
+                }
                 ignoredToolCount = page.tools.length - supported.length;
                 tools = supported;
                 _listingTools = false;
+                if (_toolRefreshPending) {
+                    _toolRefreshPending = false;
+                    _beginListTools();
+                    return;
+                }
                 isConnected = true;
                 connecting = false;
                 connectionError = "";
@@ -631,7 +656,7 @@ Item {
             waitForEnd: true
         }
 
-        onExited: exitCode => root._handleVersionProbeFinished(bridgeVersionOutput.text)
+        onExited: exitCode => root._handleVersionProbeFinished(exitCode, bridgeVersionOutput.text)
     }
 
     Process {

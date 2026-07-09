@@ -155,8 +155,19 @@ function buildRequest(provider, payload, apiKey) {
 
 function ollamaRequest(payload) {
     var base = normalizeBaseUrl(payload.baseUrl || "http://localhost:11434");
-    var useNativeTools = payload.tools && payload.tools.length > 0;
-    var url = base + (useNativeTools ? "/api/chat" : "/v1/chat/completions");
+    var hasTools = payload.tools && payload.tools.length > 0;
+    var messages = Array.isArray(payload.messages) ? payload.messages : [];
+    var hasNativeToolHistory = false;
+    for (var i = 0; i < messages.length; i++) {
+        var message = messages[i];
+        if (message && (message.role === "tool"
+                || (Array.isArray(message.tool_calls) && message.tool_calls.length > 0))) {
+            hasNativeToolHistory = true;
+            break;
+        }
+    }
+    var useNativeChat = hasTools || hasNativeToolHistory;
+    var url = base + (useNativeChat ? "/api/chat" : "/v1/chat/completions");
     var temp = clampTemperature("ollama", payload.model, payload.temperature);
     var thinkingMode = normalizeOllamaThinkingMode(payload.ollamaThinkingMode);
     var body = {
@@ -164,7 +175,7 @@ function ollamaRequest(payload) {
         messages: payload.messages,
         stream: true
     };
-    if (useNativeTools) {
+    if (useNativeChat) {
         var options = {};
         if (payload.max_tokens > 0) options.num_predict = payload.max_tokens;
         if (temp !== undefined) options.temperature = temp;
@@ -174,7 +185,8 @@ function ollamaRequest(payload) {
             body.think = false;
         else if (thinkingMode !== "default")
             body.think = thinkingMode;
-        body.tools = payload.tools;
+        if (hasTools)
+            body.tools = payload.tools;
     } else {
         if (payload.max_tokens > 0) body.max_tokens = payload.max_tokens;
         if (temp !== undefined) body.temperature = temp;

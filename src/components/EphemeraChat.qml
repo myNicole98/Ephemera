@@ -99,6 +99,7 @@ Item {
             }
             onClearRequested: root._handleClearRequest()
             onExpandToggled: root.expandToggled()
+            onPanelSideToggled: aiService.togglePanelSide()
             onHideRequested: root.hideRequested()
         }
 

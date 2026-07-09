@@ -27,7 +27,7 @@ EphemeraService.qml is the **coordinator** that owns message state (`messagesMod
 - **DMS auto-injected properties** — `pluginData`, `pluginService`, `pluginId` are injected into the root component. Don't redeclare them.
 - **`_keyringCache` clone requirement** — always use `_cloneCache()` when mutating `_keyringCache`. QML `property var` skips change notification when reassigned the same object reference, silently breaking `hasApiKey`/`missingApiKey` bindings via the alias chain.
 - **StreamingService signal ordering** — the coordinator must set up the message model entry and index map BEFORE calling `streamingService.launchCurl()`, or `findIndexById` will return -1 in signal handlers.
-- **MCP bridge gate** — MCP requires a globally installed stable `mcp-remote` 0.1.x release >= 0.1.16. MCPService resolves the exact npm executable through `npm list --global --long`; never fall back to an unchecked `PATH` command.
+- **MCP bridge gate** — MCP requires the globally installed, reviewed `mcp-remote` 0.1.38 release. MCPService resolves the exact npm executable through `npm list --global --long`; never fall back to an unchecked `PATH` command or accept an unreviewed version.
 - **MCP reconnect ordering** — setting `Process.running = false` only sends SIGTERM. Reconnects must wait for `onExited`; never restart with `Qt.callLater()` while the old process is still running.
 - **MCP round state** — `_roundContent`/`_roundThinking` contain only the current model turn. Tool audit text may be displayed through `_streamThinking` but must never be sent back as model-authored thinking.
 
@@ -57,7 +57,7 @@ EphemeraService.qml is the **coordinator** that owns message state (`messagesMod
 - `secret-tool store` receives keys via stdin — never in `/proc/cmdline`.
 - HTML escaped before markdown rendering; link schemes whitelisted to http/https.
 - Custom URLs validated: http(s) only, valid hostname, max 2048 chars, no unsafe characters.
-- MCP tool access requires exact-contract approval plus confirmation of every call. Malformed arguments fail closed.
+- MCP tool access requires exact-contract approval at the execution boundary plus confirmation of every call. Malformed names, arguments, and results fail closed.
 - Remote MCP uses HTTPS by default. Non-loopback HTTP requires consent bound to the exact endpoint; URL credentials and query strings are rejected.
 - `mcp-remote` versions below 0.1.16 are blocked due to CVE-2025-6514.
 - `forceShutdownExternal()` uses `pkill -x` (exact match) to avoid killing unrelated processes.

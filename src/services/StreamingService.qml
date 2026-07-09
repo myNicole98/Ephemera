@@ -35,22 +35,21 @@ Item {
     property var _pendingToolCalls: []
     property var _allToolCalls: []
     property var _toolResults: []
-    property var mcpService: null
+    property bool mcpConnected: false
+    property var mcpTools: []
     property bool toolCallsAllowed: false
-    property bool requireToolApproval: true
     property var approvedToolContracts: []
     property var _conversationMessages: []
     property int _pendingCallId: -1
     property var _pendingToolCallMeta: null
-    property var _pendingToolCallService: null
     property var _pendingApprovalToolCall: null
     property string _pendingApprovalToolName: ""
     property string _pendingApprovalToolDescription: ""
     property var _pendingApprovalToolArgs: ({})
     property string _pendingApprovalToolArgumentsText: ""
-    property bool _awaitingToolExecution: false
     property int _toolRoundCount: 0
     readonly property int _maxToolRounds: 4
+    readonly property int _maxToolCallsPerRound: 16
     readonly property int _maxToolResultChars: 20000
     readonly property int _maxToolArgumentChars: 20000
     readonly property int _toolCallTimeoutMs: 30000
@@ -78,6 +77,8 @@ Item {
     signal streamError(string streamId, string message)
     signal streamCancelled(string streamId, string stats)
     signal streamToolRoundReady(string streamId, var messages)
+    signal mcpToolCallRequested(string toolName, var toolArguments, var approvedContracts)
+    signal mcpToolCallCancellationRequested(var callId, string reason)
 
     // --- Public API ---
 
@@ -206,9 +207,7 @@ Item {
             var line = result.lines[i];
 
             if (line === "data: [DONE]" || line === "data:[DONE]") {
-                if (_pendingToolCalls.length > 0)
-                    _awaitingToolExecution = true;
-                else
+                if (_pendingToolCalls.length === 0)
                     _finalizeStream(activeStreamId);
                 continue;
             }
@@ -228,6 +227,11 @@ Item {
                 _apiOutputTokens = delta.outputTokens;
 
             if (delta.toolCalls && delta.toolCalls.length > 0) {
+                if (_allToolCalls.length + delta.toolCalls.length > _maxToolCallsPerRound) {
+                    chatFetcher.running = false;
+                    _markError(activeStreamId, "MCP tool call limit exceeded for one model turn.");
+                    return;
+                }
                 _seenToolCalls = true;
                 for (var tci = 0; tci < delta.toolCalls.length; tci++) {
                     _pendingToolCalls.push(delta.toolCalls[tci]);
@@ -253,9 +257,7 @@ Item {
                 }
             }
             if (delta.done) {
-                if (_pendingToolCalls.length > 0)
-                    _awaitingToolExecution = true;
-                else
+                if (_pendingToolCalls.length === 0)
                     _finalizeStream(activeStreamId);
             }
         }
@@ -267,10 +269,6 @@ Item {
         return text.substring(0, _maxToolResultChars) + "\n\n[Tool result truncated]";
     }
 
-    function _toolCallName(toolCall, fallbackName) {
-        return fallbackName || toolCall.name || "unknown_tool";
-    }
-
     function _recordToolResult(toolName, content) {
         _toolResults.push({
             role: "tool",
@@ -280,19 +278,16 @@ Item {
     }
 
     function _clearToolState(cancelPending, reason) {
-        var service = _pendingToolCallService || mcpService;
-        if (cancelPending && _pendingCallId >= 0 && service && service.cancelRequest)
-            service.cancelRequest(_pendingCallId, reason || "Tool call cancelled.");
+        if (cancelPending && _pendingCallId >= 0)
+            mcpToolCallCancellationRequested(_pendingCallId, reason || "Tool call cancelled.");
         _clearPendingToolApproval();
         _seenToolCalls = false;
         _pendingToolCalls = [];
         _allToolCalls = [];
         _toolResults = [];
-        _awaitingToolExecution = false;
         _toolRoundCount = 0;
         _pendingCallId = -1;
         _pendingToolCallMeta = null;
-        _pendingToolCallService = null;
         toolCallTimer.stop();
     }
 
@@ -327,9 +322,8 @@ Item {
             return;
         }
 
-        if (_awaitingToolExecution && _pendingToolCalls.length > 0) {
-            _awaitingToolExecution = false;
-            _executeNextToolCall();
+        if (_pendingToolCalls.length > 0) {
+            _beginToolRound();
             return;
         }
 
@@ -346,15 +340,28 @@ Item {
         }
     }
 
+    function _beginToolRound() {
+        if (_toolRoundCount >= _maxToolRounds) {
+            _markError(activeStreamId, "MCP tool call limit reached before another tool could run.");
+            return;
+        }
+        _toolRoundCount++;
+        _executeNextToolCall();
+    }
+
     function _executeNextToolCall() {
         if (_pendingToolCalls.length === 0) {
             _resumeWithToolResults();
             return;
         }
         var toolCall = _pendingToolCalls.shift();
-        var toolName = toolCall.function ? toolCall.function.name : toolCall.name;
-        var rawToolArgs = toolCall.function ? toolCall.function.arguments : toolCall.arguments;
-        toolName = _toolCallName(toolCall, toolName);
+        var parsedCall = Mcp.parseToolCall(toolCall);
+        if (!parsedCall.valid) {
+            _markError(activeStreamId, "MCP tool call blocked. " + parsedCall.error);
+            return;
+        }
+        var toolName = parsedCall.name;
+        var rawToolArgs = parsedCall.arguments;
         var blockMessage = _toolPermissionBlockMessage(toolName);
         if (blockMessage) {
             _markError(activeStreamId, blockMessage);
@@ -373,29 +380,22 @@ Item {
         }
         var toolArgs = parsedArgs.value;
         var argumentsText = Mcp.formatToolArguments(toolArgs, 0);
-        if (!mcpService || !mcpService.isConnected) {
-            _recordToolResult(toolName, "Error: MCP service not connected");
-            _executeNextToolCall();
+        argumentBlockMessage = _toolArgumentBlockMessage(toolName, argumentsText);
+        if (argumentBlockMessage) {
+            _markError(activeStreamId, argumentBlockMessage);
             return;
         }
-        if (requireToolApproval) {
-            _requestToolApproval(toolCall, toolName, toolArgs, argumentsText);
-            return;
-        }
-        _invokeToolCall(toolName, toolArgs);
+        _requestToolApproval(toolCall, toolName, toolArgs, argumentsText);
     }
 
     function _toolPermissionBlockMessage(toolName) {
         if (!toolCallsAllowed) {
             return "MCP tool call blocked. Enable model tool calls in MCP settings to let the model request tools.";
         }
-        if (!mcpService) {
-            return "MCP tool call blocked. MCP service is not available.";
-        }
-        if (!mcpService.isConnected) {
+        if (!mcpConnected) {
             return "MCP tool call blocked. MCP service is not connected.";
         }
-        if (!mcpService.isToolApproved(toolName, approvedToolContracts)) {
+        if (!Mcp.isToolApproved(Mcp.findTool(mcpTools, toolName), approvedToolContracts)) {
             return "MCP tool call blocked. The tool '" + toolName + "' is not approved in MCP settings.";
         }
         return "";
@@ -410,7 +410,9 @@ Item {
     function _requestToolApproval(toolCall, toolName, toolArgs, argumentsText) {
         _pendingApprovalToolCall = toolCall;
         _pendingApprovalToolName = toolName;
-        _pendingApprovalToolDescription = mcpService && mcpService.toolDescription ? mcpService.toolDescription(toolName) : "";
+        var tool = Mcp.findTool(mcpTools, toolName);
+        _pendingApprovalToolDescription = tool
+            ? Mcp.formatReviewText(tool.description || tool.title || "") : "";
         _pendingApprovalToolArgs = toolArgs || {};
         _pendingApprovalToolArgumentsText = argumentsText || Mcp.formatToolArguments(toolArgs, 0);
         _appendToolAudit(activeStreamId, "\nTool request awaiting approval: " + toolName + "\n");
@@ -433,21 +435,27 @@ Item {
             _markError(activeStreamId, argumentBlockMessage);
             return;
         }
-        if (!mcpService || !mcpService.isConnected) {
-            _recordToolResult(toolName, "Error: MCP service not connected");
-            _executeNextToolCall();
+        _appendToolAudit(activeStreamId, "\nCalling tool: " + toolName + "\n");
+        _pendingCallId = -2;
+        mcpToolCallRequested(toolName, toolArgs, approvedToolContracts);
+        if (_pendingCallId === -2) {
+            _pendingCallId = -1;
+            _markError(activeStreamId, "MCP tool execution handler is unavailable.");
+        }
+    }
+
+    function toolCallStarted(toolName, callId) {
+        if (!isStreaming) {
+            if (callId >= 0)
+                mcpToolCallCancellationRequested(callId, "Stream is no longer active.");
             return;
         }
-        _appendToolAudit(activeStreamId, "\nCalling tool: " + toolName + "\n");
-        var callId = mcpService.callTool(toolName, toolArgs);
         if (callId < 0) {
-            _recordToolResult(toolName, "Error: MCP service not connected");
-            _executeNextToolCall();
+            _markError(activeStreamId, "MCP tool call was rejected by the execution boundary.");
             return;
         }
         _pendingCallId = callId;
         _pendingToolCallMeta = { name: toolName };
-        _pendingToolCallService = mcpService;
         toolCallTimer.restart();
     }
 
@@ -455,7 +463,6 @@ Item {
         if (callId !== _pendingCallId) return;
         toolCallTimer.stop();
         _pendingCallId = -1;
-        _pendingToolCallService = null;
         var resultText = (typeof result === "string") ? result : JSON.stringify(result);
         _appendToolAudit(activeStreamId, "Tool completed: " + _pendingToolCallMeta.name + "\n");
         _recordToolResult(_pendingToolCallMeta.name, resultText);
@@ -467,7 +474,6 @@ Item {
         if (callId !== _pendingCallId) return;
         toolCallTimer.stop();
         _pendingCallId = -1;
-        _pendingToolCallService = null;
         _appendToolAudit(activeStreamId, "Tool failed: " + (_pendingToolCallMeta ? _pendingToolCallMeta.name : "unknown_tool") + "\n");
         _recordToolResult(_pendingToolCallMeta ? _pendingToolCallMeta.name : "unknown_tool", "Error: " + error);
         _pendingToolCallMeta = null;
@@ -476,11 +482,6 @@ Item {
 
     function _resumeWithToolResults() {
         if (_toolResults.length === 0) { _finalizeStream(activeStreamId); return; }
-        if (_toolRoundCount >= _maxToolRounds) {
-            _markError(activeStreamId, "MCP tool call limit reached.");
-            return;
-        }
-        _toolRoundCount++;
         var updatedMessages = Mcp.buildToolResumeMessages(
             _conversationMessages,
             _roundContent,
@@ -503,9 +504,7 @@ Item {
         onTriggered: {
             if (root._pendingCallId >= 0) {
                 var callId = root._pendingCallId;
-                var service = root._pendingToolCallService || root.mcpService;
-                if (service && service.cancelRequest)
-                    service.cancelRequest(callId, "MCP tool call timed out.");
+                root.mcpToolCallCancellationRequested(callId, "MCP tool call timed out.");
                 root._onToolCallFailed(callId, "MCP tool call timed out.");
             }
         }

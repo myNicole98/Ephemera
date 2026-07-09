@@ -19,6 +19,7 @@ RowLayout {
     signal exportFileRequested()
     signal clearRequested()
     signal expandToggled()
+    signal panelSideToggled()
     signal hideRequested()
 
     spacing: Theme.spacingS
@@ -414,10 +415,7 @@ RowLayout {
         iconSize: Theme.iconSize - 4
         iconColor: Theme.surfaceText
         tooltipText: aiService.panelOnLeft ? "Move to right" : "Move to left"
-        onClicked: {
-            aiService.panelOnLeft = !aiService.panelOnLeft;
-            aiService.saveSettingValue("panelOnLeft", aiService.panelOnLeft);
-        }
+        onClicked: root.panelSideToggled()
     }
 
     DankActionButton {

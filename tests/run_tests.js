@@ -76,6 +76,7 @@ var Providers = loadPragmaLib("src/lib/Providers.js");
 var Markdown = loadPragmaLib("src/lib/Markdown.js");
 var ChatExport = loadPragmaLib("src/lib/ChatExport.js");
 var Mcp = loadPragmaLib("src/lib/Mcp.js");
+var McpResult = loadPragmaLib("src/lib/McpResult.js");
 var VariantStore = loadPragmaLib("src/lib/VariantStore.js");
 var ErrorHints = loadPragmaLib("src/lib/ErrorHints.js");
 
@@ -805,6 +806,16 @@ section("Providers.buildCurlCommand");
     assertEqual(body.think, "high", "Ollama native chat maps thinking effort to think");
     delete payload.tools;
 
+    payload.messages = [
+        { role: "assistant", content: "", tool_calls: [{ function: { name: "web_search", arguments: {} } }] },
+        { role: "tool", tool_name: "web_search", content: "result" }
+    ];
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assert(r.body.indexOf('url = "http://localhost:11434/api/chat"') >= 0, "Ollama tool history keeps the native endpoint");
+    assertEqual(body.tools, undefined, "native tool history does not require current tool exposure");
+    payload.messages = [{ role: "user", content: "hi" }];
+
     payload.ollamaThinkingMode = "none";
     r = Providers.buildCurlCommand("ollama", payload, "");
     body = parseCurlConfigBody(r.body);
@@ -1206,6 +1217,9 @@ section("Mcp bridge version helpers");
     assertEqual(Mcp.isVersionInRange("0.1.15", "0.1.16", "0.2.0"), false, "rejects a bridge below the range");
     assertEqual(Mcp.isVersionInRange("0.2.0", "0.1.16", "0.2.0"), false, "rejects the exclusive bridge maximum");
     assertEqual(Mcp.isVersionInRange("1.0.0", "0.1.16", "0.2.0"), false, "rejects an unreviewed bridge major version");
+    assertEqual(Mcp.isVersionInRange("0.1.38", "0.1.38", "0.1.39"), true, "accepts the reviewed bridge release");
+    assertEqual(Mcp.isVersionInRange("0.1.37", "0.1.38", "0.1.39"), false, "rejects an older unreviewed bridge release");
+    assertEqual(Mcp.isVersionInRange("0.1.39", "0.1.38", "0.1.39"), false, "rejects a future unreviewed bridge release");
 
     var npmOutput = JSON.stringify({
         dependencies: {
@@ -1232,7 +1246,12 @@ section("Mcp endpoint safety helpers");
     assert(Mcp.mcpUrlSafetyError("https://mcp.example.com/sse#fragment").length > 0, "rejects URL fragments");
     assertEqual(Mcp.isLoopbackHttpUrl("http://localhost:8811/sse"), true, "recognizes localhost HTTP");
     assertEqual(Mcp.isLoopbackHttpUrl("http://127.0.0.1:8811/sse"), true, "recognizes IPv4 loopback HTTP");
+    assertEqual(Mcp.isLoopbackHttpUrl("http://127.255.0.1/sse"), true, "recognizes the full IPv4 loopback range");
+    assertEqual(Mcp.isLoopbackHttpUrl("http://127.attacker.example/sse"), false, "does not confuse a 127-prefixed hostname with loopback");
+    assertEqual(Mcp.isLoopbackHttpUrl("http://127.0.0.1.attacker.example/sse"), false, "does not accept a loopback-looking remote hostname");
+    assertEqual(Mcp.isLoopbackHttpUrl("http://127.0.0.999/sse"), false, "rejects invalid loopback octets");
     assertEqual(Mcp.requiresInsecureHttpConsent("http://192.168.1.4:8811/sse"), true, "requires consent for remote HTTP");
+    assertEqual(Mcp.requiresInsecureHttpConsent("http://127.attacker.example/sse"), true, "requires consent for a 127-prefixed remote hostname");
     assertEqual(Mcp.requiresInsecureHttpConsent("http://localhost:8811/sse"), false, "does not require extra consent for loopback HTTP");
     assertEqual(Mcp.requiresInsecureHttpConsent("https://mcp.example.com/sse"), false, "does not require consent for HTTPS");
 })();
@@ -1242,12 +1261,15 @@ section("Mcp advertised tool validation");
     var valid = { name: "search.docs", inputSchema: { type: "object" } };
     var duplicate = { name: "search.docs", description: "duplicate", inputSchema: { type: "object" } };
     var invalidName = { name: "search docs", inputSchema: { type: "object" } };
+    var paddedName = { name: " search.docs ", inputSchema: { type: "object" } };
     var invalidSchema = { name: "bad_schema", inputSchema: { type: "array" } };
     var taskOnly = { name: "task_only", inputSchema: { type: "object" }, execution: { taskSupport: "required" } };
     var invalidMetadata = { name: "bad_metadata", description: { text: "not a string" }, inputSchema: { type: "object" } };
-    var tools = Mcp.sanitizeTools([valid, duplicate, invalidName, invalidSchema, taskOnly, invalidMetadata]);
+    var tools = Mcp.sanitizeTools([valid, duplicate, invalidName, paddedName, invalidSchema, taskOnly, invalidMetadata]);
     assertEqual(tools.length, 1, "keeps only supported tools with unique names");
     assertEqual(tools[0].name, "search.docs", "keeps the first valid tool contract");
+    assertEqual(Mcp.findTool(tools, "search.docs"), valid, "finds an exact advertised tool name");
+    assertEqual(Mcp.findTool(tools, " search.docs "), null, "does not normalize a requested tool name");
 
     var deep = { type: "object" };
     var cursor = deep;
@@ -1294,6 +1316,9 @@ section("Mcp tool approval helpers");
     assert(key.indexOf("search\n") === 0, "approval key includes tool name prefix");
     assert(key.indexOf("Search documents") >= 0, "approval key includes the serialized tool contract");
     assertEqual(Mcp.toolFingerprint(searchTool), Mcp.toolFingerprint(sameSearchTool), "contract fingerprint is stable across object key order");
+    var contractText = Mcp.formatToolContract(searchTool);
+    assert(contractText.indexOf('"inputSchema"') >= 0, "contract review includes the input schema");
+    assert(contractText.indexOf('"outputSchema"') >= 0, "contract review includes every approval-bound field");
 
     var approvals = Mcp.setToolApproved([], searchTool, true);
     assertEqual(approvals.length, 1, "adds exact tool approval");
@@ -1321,6 +1346,9 @@ section("Mcp tool argument helpers");
     assertEqual(Mcp.parseToolArguments('["bad"]').valid, false, "JSON array arguments fail closed");
     assertEqual(Mcp.parseToolArguments(["bad"]).valid, false, "array arguments fail closed");
     assertEqual(Mcp.parseToolArguments(null).valid, true, "missing optional arguments become an empty object");
+    assertEqual(Mcp.parseToolCall({ function: { name: "search", arguments: { query: "ephemera" } } }).valid, true, "accepts a canonical provider tool call");
+    assertEqual(Mcp.parseToolCall({ function: { name: " search ", arguments: {} } }).valid, false, "rejects a padded tool call name");
+    assertEqual(Mcp.parseToolCall(null).valid, false, "rejects a malformed tool call envelope");
 
     var preview = Mcp.formatToolArguments({ query: "ephemera" }, 100);
     assert(preview.indexOf('"query": "ephemera"') >= 0, "formats object arguments as pretty JSON");
@@ -1329,6 +1357,10 @@ section("Mcp tool argument helpers");
     preview = Mcp.formatToolArguments({ body: "a".repeat(32) }, 0);
     assert(preview.indexOf("[Arguments truncated]") < 0, "limit 0 keeps full argument text");
     assert(preview.indexOf("a".repeat(32)) >= 0, "full argument text includes complete value");
+    preview = Mcp.formatToolArguments({ path: "safe\u202eevil" }, 0);
+    assert(preview.indexOf("\\u202e") >= 0, "escapes bidirectional controls in approval text");
+    assert(Mcp.formatReviewText("safe\u200bevil").indexOf("\\u200b") >= 0,
+        "escapes invisible controls in server descriptions");
 })();
 
 section("Mcp.buildToolResumeMessages");
@@ -1386,6 +1418,80 @@ section("Mcp.formatToolResult");
     assertEqual(Mcp.formatToolResult("plain"), "plain", "passes strings through");
     assertEqual(Mcp.isToolError({ isError: true }), true, "detects MCP tool errors");
     assertEqual(Mcp.isToolError({ isError: false }), false, "non-error result is not an error");
+})();
+
+section("McpResult.validateToolResult");
+(function() {
+    var tool = {
+        name: "lookup",
+        inputSchema: { type: "object" },
+        outputSchema: {
+            type: "object",
+            properties: {
+                count: { type: "integer", minimum: 0 },
+                labels: { type: "array", items: { type: "string" } }
+            },
+            required: ["count"],
+            additionalProperties: false
+        }
+    };
+    var valid = McpResult.validateToolResult(tool, {
+        content: [{ type: "text", text: "two" }],
+        structuredContent: { count: 2, labels: ["a", "b"] }
+    });
+    assertEqual(valid.valid, true, "accepts structured output matching the advertised schema");
+    assertEqual(McpResult.validateToolResult(tool, {
+        content: [{ type: "text", text: "bad" }],
+        structuredContent: { count: "two" }
+    }).valid, false, "rejects structured output with the wrong type");
+    assertEqual(McpResult.validateToolResult(tool, {
+        content: [{ type: "text", text: "missing" }]
+    }).valid, false, "rejects missing advertised structured output");
+    assertEqual(McpResult.validateToolResult({ name: "plain" }, {}).valid, false, "rejects a result without the required content array");
+    assertEqual(McpResult.validateToolResult({ name: "plain" }, {
+        content: [],
+        structuredContent: ["not", "an", "object"]
+    }).valid, false, "rejects non-object structured output");
+    assertEqual(McpResult.validateToolResult({ name: "plain" }, {
+        content: new Array(1025).fill({ type: "text", text: "" })
+    }).valid, false, "rejects an excessive number of result content items");
+    assertEqual(McpResult.validateToolResult(tool, {
+        content: [{ type: "script", text: "bad" }],
+        structuredContent: { count: 1 }
+    }).valid, false, "rejects unsupported MCP content types");
+    var referencedTool = {
+        name: "lookup_ref",
+        inputSchema: { type: "object" },
+        outputSchema: { "$ref": "https://attacker.example/schema.json" }
+    };
+    assertEqual(McpResult.validateToolResult(referencedTool, {
+        content: [],
+        structuredContent: { count: 1 }
+    }).valid, false, "fails closed on unresolved output schema references");
+    var nestedReferenceTool = {
+        name: "lookup_nested_ref",
+        inputSchema: { type: "object" },
+        outputSchema: {
+            type: "object",
+            properties: {
+                optional: { "$ref": "https://attacker.example/optional.json" }
+            }
+        }
+    };
+    assert(McpResult.outputSchemaSupportError(nestedReferenceTool.outputSchema).length > 0,
+        "rejects unsupported schema references even when the property is absent");
+    assertEqual(McpResult.validateToolResult(nestedReferenceTool, {
+        content: [],
+        structuredContent: {}
+    }).valid, false, "fails closed on an unvisited nested schema reference");
+    assert(McpResult.outputSchemaSupportError({
+        type: "object",
+        properties: { value: { enum: [{ nested: true }] } }
+    }).length > 0, "rejects complex enum values that cannot be compared within a fixed budget");
+    assertEqual(McpResult.validateToolResult(tool, {
+        isError: true,
+        content: [{ type: "text", text: "failed" }]
+    }).valid, true, "allows a well-formed error result without structured output");
 })();
 
 // ═════════════════════════════════════════════════════════════════

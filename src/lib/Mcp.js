@@ -181,7 +181,17 @@ function isLoopbackHttpUrl(url) {
     var match = /^http:\/\/([^/:?#]+)(?::\d+)?(?:[/?#]|$)/i.exec(String(url || "").trim());
     if (!match) return false;
     var host = match[1].toLowerCase();
-    return host === "localhost" || host.indexOf("127.") === 0;
+    if (host === "localhost")
+        return true;
+
+    var octets = host.split(".");
+    if (octets.length !== 4 || octets[0] !== "127")
+        return false;
+    for (var i = 0; i < octets.length; i++) {
+        if (!/^\d{1,3}$/.test(octets[i]) || Number(octets[i]) > 255)
+            return false;
+    }
+    return true;
 }
 
 /**
@@ -207,7 +217,7 @@ function isSupportedTool(tool) {
     if (typeof tool.name !== "string")
         return false;
     var name = tool.name.trim();
-    if (!/^[A-Za-z0-9_.-]{1,128}$/.test(name))
+    if (name !== tool.name || !/^[A-Za-z0-9_.-]{1,128}$/.test(name))
         return false;
     if (!tool.inputSchema || typeof tool.inputSchema !== "object" || Array.isArray(tool.inputSchema))
         return false;
@@ -234,6 +244,26 @@ function isSupportedTool(tool) {
 }
 
 /**
+ * Find a tool by its exact, case-sensitive advertised name.
+ *
+ * Tool names are authorization identifiers, so callers must never normalize a
+ * model-provided name for comparison and then execute the unnormalized value.
+ *
+ * @param {Array} tools - Current sanitized MCP tools.
+ * @param {string} toolName - Exact tool name requested by the model.
+ * @returns {Object|null} Matching tool contract, or null.
+ */
+function findTool(tools, toolName) {
+    if (!Array.isArray(tools) || typeof toolName !== "string")
+        return null;
+    for (var i = 0; i < tools.length; i++) {
+        if (tools[i] && tools[i].name === toolName)
+            return tools[i];
+    }
+    return null;
+}
+
+/**
  * Filter invalid, unsupported, and duplicate tool contracts.
  *
  * @param {Array} tools - MCP tools/list entries.
@@ -246,7 +276,7 @@ function sanitizeTools(tools) {
     for (var i = 0; i < tools.length; i++) {
         var tool = tools[i];
         if (!isSupportedTool(tool) || !toolFingerprint(tool)) continue;
-        var name = String(tool.name).trim();
+        var name = tool.name;
         var seenKey = "$" + name;
         if (seen[seenKey]) continue;
         seen[seenKey] = true;
@@ -261,11 +291,11 @@ function sanitizeTools(tools) {
  * @param {Object} tool - MCP tools/list entry.
  * @returns {string} Stable serialized contract.
  */
-function toolFingerprint(tool) {
+function _executableToolContract(tool) {
     if (!tool || tool.name === undefined)
-        return "";
-    var contract = {
-        name: String(tool.name || "").trim(),
+        return null;
+    return {
+        name: String(tool.name || ""),
         title: tool.title || "",
         description: tool.description || "",
         inputSchema: tool.inputSchema || {},
@@ -273,10 +303,32 @@ function toolFingerprint(tool) {
         annotations: tool.annotations || {},
         execution: tool.execution || {}
     };
+}
+
+function toolFingerprint(tool) {
+    if (!tool || tool.name === undefined)
+        return "";
+    var contract = _executableToolContract(tool);
     try {
         return _stableStringify(contract, 0);
     } catch (e) {
         return "";
+    }
+}
+
+/**
+ * Format the complete executable contract for explicit user review.
+ *
+ * @param {Object} tool - MCP tools/list entry.
+ * @returns {string} Pretty JSON containing every approval-bound field.
+ */
+function formatToolContract(tool) {
+    var contract = _executableToolContract(tool);
+    if (!contract) return "{}";
+    try {
+        return formatReviewText(JSON.stringify(contract, null, 2));
+    } catch (e) {
+        return "{}";
     }
 }
 
@@ -287,7 +339,7 @@ function toolFingerprint(tool) {
  * @returns {string} Approval key containing tool name and schema fingerprint.
  */
 function toolApprovalKey(tool) {
-    var name = tool && tool.name !== undefined ? String(tool.name || "").trim() : "";
+    var name = tool && typeof tool.name === "string" ? tool.name : "";
     if (!name) return "";
     var fingerprint = toolFingerprint(tool);
     if (!fingerprint) return "";
@@ -486,6 +538,50 @@ function parseToolArguments(args) {
 }
 
 /**
+ * Validate and normalize one provider tool-call envelope without changing its name.
+ *
+ * @param {Object} toolCall - Provider tool-call payload.
+ * @returns {{ valid: boolean, name: string, arguments: Object|string, error: string }} Parsed call.
+ */
+function parseToolCall(toolCall) {
+    if (!toolCall || typeof toolCall !== "object" || Array.isArray(toolCall))
+        return { valid: false, name: "", arguments: {}, error: "Tool call must be an object." };
+    var fn = toolCall.function && typeof toolCall.function === "object"
+        && !Array.isArray(toolCall.function) ? toolCall.function : toolCall;
+    var name = fn.name;
+    if (typeof name !== "string" || name !== name.trim()
+            || !/^[A-Za-z0-9_.-]{1,128}$/.test(name)) {
+        return { valid: false, name: "", arguments: {}, error: "Tool call has an invalid name." };
+    }
+    return {
+        valid: true,
+        name: name,
+        arguments: fn.arguments,
+        error: ""
+    };
+}
+
+function _escapeReviewControls(text) {
+    var value = text === undefined || text === null ? "" : String(text);
+    return value.replace(/[\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g,
+        function(character) {
+            var hex = character.charCodeAt(0).toString(16);
+            while (hex.length < 4) hex = "0" + hex;
+            return "\\u" + hex;
+        });
+}
+
+/**
+ * Escape invisible and bidirectional controls in untrusted review text.
+ *
+ * @param {*} value - Server- or model-provided value shown in an approval UI.
+ * @returns {string} Review-safe plain text.
+ */
+function formatReviewText(value) {
+    return _escapeReviewControls(value);
+}
+
+/**
  * Format tool arguments for a compact user approval prompt.
  *
  * @param {Object|string} args - Tool arguments.
@@ -509,5 +605,5 @@ function formatToolArguments(args, maxChars) {
     var limit = Number(maxChars) || 0;
     if (limit > 0 && text.length > limit)
         return text.substring(0, limit) + "\n\n[Arguments truncated]";
-    return text || "{}";
+    return formatReviewText(text || "{}");
 }

@@ -1,0 +1,140 @@
+import QtQuick
+import Quickshell
+import "./src/services"
+
+ShellRoot {
+    id: root
+
+    property string phase: "connecting"
+    property int connectionCount: 0
+    property int toolRequestCount: 0
+    property int toolCompletionCount: 0
+    property var approvedContracts: []
+    property var activeApprovals: []
+    property bool finished: false
+
+    function finish(success, message) {
+        if (finished) return;
+        finished = true;
+        console.log("EPHEMERA_MCP_APPROVAL_TEST " + (success ? "PASS" : "FAIL") + ": " + message);
+        Qt.quit();
+    }
+
+    function startToolTurn(streamId, approvals) {
+        activeApprovals = approvals;
+        streaming.beginStream(streamId, 0, [{ role: "user", content: "echo hello" }]);
+        streaming.handleStreamChunk(JSON.stringify({
+            message: {
+                role: "assistant",
+                content: "",
+                tool_calls: [{ function: { name: "echo", arguments: { text: "hello" } } }]
+            },
+            done: true,
+            eval_count: 3
+        }) + "\n");
+        streaming.handleStreamFinished("\nEPH_STATUS:200\n");
+    }
+
+    Component.onCompleted: mcp.connectToServer()
+
+    Timer {
+        interval: 10000
+        running: true
+        repeat: false
+        onTriggered: root.finish(false, "timed out during " + root.phase)
+    }
+
+    MCPService {
+        id: mcp
+        enabled: true
+        mcpUrl: "https://mcp.example.test/sse"
+
+        onMcpConnectionStateChanged: {
+            if (!isConnected) return;
+            root.connectionCount++;
+            if (root.connectionCount === 1) {
+                root.approvedContracts = setToolApproved([], "echo", true);
+                root.phase = "unapproved";
+                Qt.callLater(function() { root.startToolTurn("blocked", []); });
+            } else if (root.connectionCount === 2 && root.phase === "reconnecting") {
+                root.finish(true, "deny, recheck, approve, execute, resume, and reconnect completed");
+            }
+        }
+
+        onToolCallCompleted: (callId, result) => {
+            root.toolCompletionCount++;
+            streaming._onToolCallCompleted(callId, result);
+        }
+
+        onToolCallFailed: (callId, error) => streaming._onToolCallFailed(callId, error)
+    }
+
+    StreamingService {
+        id: streaming
+        provider: "ollama"
+        mcpConnected: mcp.isConnected
+        mcpTools: mcp.tools
+        toolCallsAllowed: true
+        approvedToolContracts: root.activeApprovals
+
+        onMcpToolCallRequested: (toolName, toolArguments, approvals) => {
+            root.toolRequestCount++;
+            var callId = mcp.callTool(toolName, toolArguments, approvals);
+            streaming.toolCallStarted(toolName, callId);
+        }
+        onMcpToolCallCancellationRequested: (callId, reason) => mcp.cancelRequest(callId, reason)
+
+        onStreamError: (streamId, message) => {
+            if (root.phase === "unapproved") {
+                if (root.toolRequestCount !== 0 || message.indexOf("not approved") < 0) {
+                    root.finish(false, "unapproved tool was not blocked cleanly");
+                    return;
+                }
+                root.phase = "permission-recheck";
+                Qt.callLater(function() {
+                    root.startToolTurn("recheck", root.approvedContracts);
+                    if (!streaming.toolApprovalPending) {
+                        root.finish(false, "approved tool did not request confirmation");
+                        return;
+                    }
+                    root.activeApprovals = [];
+                    streaming.approvePendingToolCall();
+                });
+            } else if (root.phase === "permission-recheck") {
+                if (root.toolRequestCount !== 0 || message.indexOf("not approved") < 0) {
+                    root.finish(false, "permission was not rechecked before execution");
+                    return;
+                }
+                root.phase = "approved";
+                Qt.callLater(function() {
+                    root.startToolTurn("approved", root.approvedContracts);
+                    if (!streaming.toolApprovalPending
+                            || streaming.pendingToolArgumentsText.indexOf('"text": "hello"') < 0) {
+                        root.finish(false, "confirmation did not show complete arguments");
+                        return;
+                    }
+                    streaming.approvePendingToolCall();
+                });
+            } else {
+                root.finish(false, "unexpected stream error: " + message);
+            }
+        }
+
+        onStreamToolRoundReady: (streamId, messages) => {
+            if (root.phase !== "approved" || root.toolRequestCount !== 1
+                    || root.toolCompletionCount !== 1) {
+                root.finish(false, "tool execution counts were incorrect");
+                return;
+            }
+            if (messages.length !== 3 || messages[1].role !== "assistant"
+                    || messages[1].thinking !== undefined
+                    || messages[2].role !== "tool" || messages[2].tool_name !== "echo"
+                    || messages[2].content !== "hello") {
+                root.finish(false, "tool result round-trip was malformed");
+                return;
+            }
+            root.phase = "reconnecting";
+            mcp.reconnectToServer();
+        }
+    }
+}

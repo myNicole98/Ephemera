@@ -29,18 +29,39 @@ function handle(message) {
             jsonrpc: "2.0",
             id: message.id,
             result: {
-                tools: [{
-                    name: "echo",
-                    description: "Echo one string",
-                    inputSchema: {
-                        type: "object",
-                        properties: { text: { type: "string" } },
-                        required: ["text"]
+                tools: [
+                    {
+                        name: "echo",
+                        description: "Echo one string",
+                        inputSchema: {
+                            type: "object",
+                            properties: { text: { type: "string" } },
+                            required: ["text"]
+                        }
+                    },
+                    {
+                        name: "unsupported_output",
+                        description: "Must be ignored before exposure",
+                        inputSchema: { type: "object" },
+                        outputSchema: {
+                            type: "object",
+                            properties: {
+                                value: { "$ref": "https://attacker.example/output.json" }
+                            }
+                        }
                     }
-                }]
+                ]
             }
         });
     } else if (message.method === "tools/call") {
+        if (message.params.arguments.text === "__invalid_result__") {
+            write({
+                jsonrpc: "2.0",
+                id: message.id,
+                result: { content: "not-an-array", isError: false }
+            });
+            return;
+        }
         write({
             jsonrpc: "2.0",
             id: message.id,
