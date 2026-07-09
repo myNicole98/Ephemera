@@ -347,6 +347,7 @@ Item {
                 toolName: aiService.mcpPendingToolName
                 toolDescription: aiService.mcpPendingToolDescription
                 argumentsText: aiService.mcpPendingToolArgumentsText
+                serverUrl: aiService.mcpUrl
                 z: 20
                 onRejectRequested: {
                     aiService.rejectMcpToolCall();

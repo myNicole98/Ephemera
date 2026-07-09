@@ -1,7 +1,7 @@
 .pragma library
 
 /**
- * Build the trust key used to bind automatic tool execution to one MCP server.
+ * Build the trust key used to bind tool approvals to one MCP server.
  *
  * @param {string} url - MCP server URL.
  * @param {string} command - Bridge executable command.
@@ -22,8 +22,9 @@ function _normalizeStringArray(values) {
     var result = [];
     for (var i = 0; i < input.length; i++) {
         var value = String(input[i] || "").trim();
-        if (!value || seen[value]) continue;
-        seen[value] = true;
+        var seenKey = "$" + value;
+        if (!value || seen[seenKey]) continue;
+        seen[seenKey] = true;
         result.push(value);
     }
     return result;
@@ -50,7 +51,10 @@ function _setStringAllowed(values, value, allowed) {
     return result;
 }
 
-function _stableStringify(value) {
+function _stableStringify(value, depth) {
+    var currentDepth = Number(depth) || 0;
+    if (currentDepth > 32)
+        throw new Error("Object nesting exceeds the supported depth.");
     if (value === undefined)
         return "null";
     if (value === null || typeof value !== "object")
@@ -58,7 +62,7 @@ function _stableStringify(value) {
     if (Array.isArray(value)) {
         var parts = [];
         for (var i = 0; i < value.length; i++)
-            parts.push(_stableStringify(value[i]));
+            parts.push(_stableStringify(value[i], currentDepth + 1));
         return "[" + parts.join(",") + "]";
     }
 
@@ -68,73 +72,185 @@ function _stableStringify(value) {
         var key = keys[j];
         if (value[key] === undefined)
             continue;
-        fields.push(JSON.stringify(key) + ":" + _stableStringify(value[key]));
+        fields.push(JSON.stringify(key) + ":" + _stableStringify(value[key], currentDepth + 1));
     }
     return "{" + fields.join(",") + "}";
 }
 
 /**
- * Normalize a list of allowed tool names into unique trimmed strings.
+ * Return true when a semantic version is at least the required stable version.
  *
- * @param {Array|string} names - Tool names or a JSON-encoded array.
- * @returns {Array<string>} Unique tool names.
+ * Prerelease builds are rejected because the bridge is a security boundary.
+ *
+ * @param {string} version - Installed semantic version.
+ * @param {string} minimum - Minimum accepted semantic version.
+ * @returns {boolean} Whether the installed version is accepted.
  */
-function normalizeToolNames(names) {
-    return _normalizeStringArray(names);
-}
+function isVersionAtLeast(version, minimum) {
+    var pattern = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+    var current = pattern.exec(String(version || "").trim());
+    var required = pattern.exec(String(minimum || "").trim());
+    if (!current || !required || current[4])
+        return false;
 
-/**
- * Return true if a tool name is in the explicit allowlist.
- *
- * @param {string} toolName - Tool name requested by the model.
- * @param {Array|string} allowedNames - Explicitly allowed tool names.
- * @returns {boolean} Whether the tool may be executed.
- */
-function isToolAllowed(toolName, allowedNames) {
-    var name = String(toolName || "").trim();
-    if (!name) return false;
-    var allowed = normalizeToolNames(allowedNames);
-    for (var i = 0; i < allowed.length; i++) {
-        if (allowed[i] === name)
-            return true;
+    for (var i = 1; i <= 3; i++) {
+        var currentPart = Number(current[i]);
+        var requiredPart = Number(required[i]);
+        if (currentPart > requiredPart) return true;
+        if (currentPart < requiredPart) return false;
     }
-    return false;
+    return true;
 }
 
 /**
- * Add or remove a tool from an allowlist.
+ * Return true when a stable semantic version is inside a half-open range.
  *
- * @param {Array|string} allowedNames - Current allowlist.
- * @param {string} toolName - Tool name to update.
- * @param {boolean} allowed - Whether the tool should be present.
- * @returns {Array<string>} Updated allowlist.
+ * @param {string} version - Installed semantic version.
+ * @param {string} minimum - Inclusive minimum accepted version.
+ * @param {string} maximumExclusive - Exclusive maximum accepted version.
+ * @returns {boolean} Whether the installed version is inside the range.
  */
-function setToolAllowed(allowedNames, toolName, allowed) {
-    return _setStringAllowed(allowedNames, toolName, allowed);
+function isVersionInRange(version, minimum, maximumExclusive) {
+    return isVersionAtLeast(version, minimum)
+        && !isVersionAtLeast(version, maximumExclusive);
 }
 
 /**
- * Keep only allowed names that still exist in the current tool list.
+ * Extract one globally installed npm package version from `npm list --json`.
  *
- * @param {Array|string} allowedNames - Current allowlist.
+ * @param {string} jsonText - npm list JSON output.
+ * @param {string} packageName - Package name to inspect.
+ * @returns {string} Installed version, or an empty string when unavailable.
+ */
+function extractNpmPackageVersion(jsonText, packageName) {
+    return extractNpmPackageInfo(jsonText, packageName).version;
+}
+
+/**
+ * Extract a checked npm package version and executable path from `npm list --long`.
+ *
+ * @param {string} jsonText - npm list JSON output.
+ * @param {string} packageName - Package name to inspect.
+ * @returns {{ version: string, executable: string }} Installed package information.
+ */
+function extractNpmPackageInfo(jsonText, packageName) {
+    try {
+        var data = JSON.parse(String(jsonText || ""));
+        var dependencies = data && data.dependencies;
+        var entry = dependencies && dependencies[String(packageName || "")];
+        var version = entry && entry.version ? String(entry.version).trim() : "";
+        var packagePath = entry && entry.path ? String(entry.path) : "";
+        var bin = entry && entry.bin;
+        var relativeBin = typeof bin === "string" ? bin : (bin && bin[String(packageName || "")]);
+        relativeBin = String(relativeBin || "");
+        if (!version || packagePath.charAt(0) !== "/" || relativeBin !== "dist/proxy.js")
+            return { version: "", executable: "" };
+        if (/[\x00-\x1f\x7f]/.test(packagePath))
+            return { version: "", executable: "" };
+        return { version: version, executable: packagePath + "/" + relativeBin };
+    } catch (e) {
+        return { version: "", executable: "" };
+    }
+}
+
+/**
+ * Reject MCP endpoint forms that would expose credentials through process argv.
+ *
+ * @param {string} url - Validated HTTP(S) MCP endpoint.
+ * @returns {string} Empty when safe, otherwise a user-facing error.
+ */
+function mcpUrlSafetyError(url) {
+    var value = String(url || "").trim();
+    var authority = /^https?:\/\/([^/?#]+)/i.exec(value);
+    if (!authority)
+        return "MCP URL must use http:// or https://.";
+    if (authority[1].indexOf("@") >= 0)
+        return "MCP URL must not contain embedded credentials.";
+    if (value.indexOf("?") >= 0 || value.indexOf("#") >= 0)
+        return "MCP URL must not contain a query string or fragment because the bridge URL is visible to local processes.";
+    return "";
+}
+
+/**
+ * Return true for HTTP endpoints on the local loopback interface.
+ *
+ * @param {string} url - MCP endpoint URL.
+ * @returns {boolean} Whether the endpoint is loopback HTTP.
+ */
+function isLoopbackHttpUrl(url) {
+    var match = /^http:\/\/([^/:?#]+)(?::\d+)?(?:[/?#]|$)/i.exec(String(url || "").trim());
+    if (!match) return false;
+    var host = match[1].toLowerCase();
+    return host === "localhost" || host.indexOf("127.") === 0;
+}
+
+/**
+ * Return true when a non-loopback HTTP endpoint needs explicit consent.
+ *
+ * @param {string} url - MCP endpoint URL.
+ * @returns {boolean} Whether insecure transport consent is required.
+ */
+function requiresInsecureHttpConsent(url) {
+    var value = String(url || "").trim();
+    return /^http:\/\//i.test(value) && !isLoopbackHttpUrl(value);
+}
+
+/**
+ * Return true when a tool contract can be represented safely by this client.
+ *
+ * @param {Object} tool - MCP tools/list entry.
+ * @returns {boolean} Whether the tool is supported.
+ */
+function isSupportedTool(tool) {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool))
+        return false;
+    if (typeof tool.name !== "string")
+        return false;
+    var name = tool.name.trim();
+    if (!/^[A-Za-z0-9_.-]{1,128}$/.test(name))
+        return false;
+    if (!tool.inputSchema || typeof tool.inputSchema !== "object" || Array.isArray(tool.inputSchema))
+        return false;
+    if (tool.inputSchema.type !== "object")
+        return false;
+    if (tool.title !== undefined
+            && (typeof tool.title !== "string" || tool.title.length > 256))
+        return false;
+    if (tool.description !== undefined
+            && (typeof tool.description !== "string" || tool.description.length > 4096))
+        return false;
+    if (tool.outputSchema !== undefined
+            && (!tool.outputSchema || typeof tool.outputSchema !== "object" || Array.isArray(tool.outputSchema)))
+        return false;
+    if (tool.annotations !== undefined
+            && (!tool.annotations || typeof tool.annotations !== "object" || Array.isArray(tool.annotations)))
+        return false;
+    if (tool.execution !== undefined
+            && (!tool.execution || typeof tool.execution !== "object" || Array.isArray(tool.execution)))
+        return false;
+    if (tool.execution && tool.execution.taskSupport === "required")
+        return false;
+    return true;
+}
+
+/**
+ * Filter invalid, unsupported, and duplicate tool contracts.
+ *
  * @param {Array} tools - MCP tools/list entries.
- * @returns {Array<string>} Pruned allowlist.
+ * @returns {Array} Supported tools with unique names.
  */
-function pruneAllowedTools(allowedNames, tools) {
-    var allowed = normalizeToolNames(allowedNames);
-    if (!Array.isArray(tools) || tools.length === 0)
-        return [];
-
-    var available = {};
-    for (var i = 0; i < tools.length; i++) {
-        if (tools[i] && tools[i].name !== undefined)
-            available[String(tools[i].name).trim()] = true;
-    }
-
+function sanitizeTools(tools) {
+    if (!Array.isArray(tools)) return [];
+    var seen = {};
     var result = [];
-    for (var j = 0; j < allowed.length; j++) {
-        if (available[allowed[j]])
-            result.push(allowed[j]);
+    for (var i = 0; i < tools.length; i++) {
+        var tool = tools[i];
+        if (!isSupportedTool(tool) || !toolFingerprint(tool)) continue;
+        var name = String(tool.name).trim();
+        var seenKey = "$" + name;
+        if (seen[seenKey]) continue;
+        seen[seenKey] = true;
+        result.push(tool);
     }
     return result;
 }
@@ -154,9 +270,14 @@ function toolFingerprint(tool) {
         description: tool.description || "",
         inputSchema: tool.inputSchema || {},
         outputSchema: tool.outputSchema || {},
-        annotations: tool.annotations || {}
+        annotations: tool.annotations || {},
+        execution: tool.execution || {}
     };
-    return _stableStringify(contract);
+    try {
+        return _stableStringify(contract, 0);
+    } catch (e) {
+        return "";
+    }
 }
 
 /**
@@ -344,20 +465,24 @@ function isToolError(result) {
  * Normalize tool-call arguments from provider-specific payload shapes.
  *
  * @param {Object|string} args - Tool arguments from a model tool call.
- * @returns {Object} Parsed argument object, or an empty object on invalid input.
+ * @returns {{ valid: boolean, value: Object, error: string }} Validation result.
  */
 function parseToolArguments(args) {
     if (typeof args === "string") {
         try {
             var parsed = JSON.parse(args);
-            return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+                return { valid: true, value: parsed, error: "" };
+            return { valid: false, value: {}, error: "Tool arguments must be a JSON object." };
         } catch (e) {
-            return {};
+            return { valid: false, value: {}, error: "Tool arguments contain invalid JSON." };
         }
     }
     if (args && typeof args === "object" && !Array.isArray(args))
-        return args;
-    return {};
+        return { valid: true, value: args, error: "" };
+    if (args === undefined || args === null)
+        return { valid: true, value: {}, error: "" };
+    return { valid: false, value: {}, error: "Tool arguments must be an object." };
 }
 
 /**

@@ -9,6 +9,7 @@ Rectangle {
     property string toolName: ""
     property string toolDescription: ""
     property string argumentsText: "{}"
+    property string serverUrl: ""
 
     signal approveRequested()
     signal rejectRequested()
@@ -56,7 +57,29 @@ Rectangle {
             font.pixelSize: Theme.fontSizeSmall
             color: Theme.surfaceVariantText
             wrapMode: Text.WordWrap
+            maximumLineCount: 6
+            elide: Text.ElideRight
             visible: root.toolDescription.length > 0
+        }
+
+        StyledText {
+            width: parent.width
+            text: "Server: " + root.serverUrl
+            textFormat: Text.PlainText
+            font.pixelSize: Theme.fontSizeSmall
+            font.family: Theme.monoFontFamily
+            color: Theme.surfaceVariantText
+            elide: Text.ElideMiddle
+            visible: root.serverUrl.length > 0
+        }
+
+        StyledText {
+            width: parent.width
+            text: "This tool may read or modify external data. Approve only after reviewing every argument."
+            textFormat: Text.PlainText
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.error
+            wrapMode: Text.WordWrap
         }
 
         Rectangle {

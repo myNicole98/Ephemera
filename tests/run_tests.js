@@ -1193,30 +1193,69 @@ section("Mcp.trustKey");
     assertEqual(Mcp.trustKey("", "mcp-remote"), "mcp-remote\n", "empty URL remains part of key");
 })();
 
-section("Mcp tool allowlist helpers");
+section("Mcp bridge version helpers");
 (function() {
-    var names = Mcp.normalizeToolNames([" search ", "search", "", null, "read_file"]);
-    assertEqual(names.length, 2, "normalizes and de-duplicates tool names");
-    assertEqual(names[0], "search", "trims tool names");
-    assertEqual(names[1], "read_file", "keeps later unique tool names");
+    assertEqual(Mcp.isVersionAtLeast("0.1.16", "0.1.16"), true, "accepts the first patched bridge version");
+    assertEqual(Mcp.isVersionAtLeast("0.1.38", "0.1.16"), true, "accepts a newer patch version");
+    assertEqual(Mcp.isVersionAtLeast("1.0.0", "0.1.16"), true, "accepts a newer major version");
+    assertEqual(Mcp.isVersionAtLeast("0.1.15", "0.1.16"), false, "rejects a vulnerable bridge version");
+    assertEqual(Mcp.isVersionAtLeast("0.1.16-beta.1", "0.1.16"), false, "rejects prerelease bridge versions");
+    assertEqual(Mcp.isVersionAtLeast("latest", "0.1.16"), false, "rejects non-semantic versions");
+    assertEqual(Mcp.isVersionInRange("0.1.16", "0.1.16", "0.2.0"), true, "accepts the bottom of the bridge range");
+    assertEqual(Mcp.isVersionInRange("0.1.38", "0.1.16", "0.2.0"), true, "accepts a patched bridge in range");
+    assertEqual(Mcp.isVersionInRange("0.1.15", "0.1.16", "0.2.0"), false, "rejects a bridge below the range");
+    assertEqual(Mcp.isVersionInRange("0.2.0", "0.1.16", "0.2.0"), false, "rejects the exclusive bridge maximum");
+    assertEqual(Mcp.isVersionInRange("1.0.0", "0.1.16", "0.2.0"), false, "rejects an unreviewed bridge major version");
 
-    names = Mcp.normalizeToolNames('["search","read_file"]');
-    assertEqual(names.length, 2, "parses JSON allowlist strings");
-    assertEqual(Mcp.normalizeToolNames("not json").length, 0, "invalid JSON allowlist becomes empty");
+    var npmOutput = JSON.stringify({
+        dependencies: {
+            "mcp-remote": {
+                version: "0.1.38",
+                path: "/opt/npm/lib/node_modules/mcp-remote",
+                bin: { "mcp-remote": "dist/proxy.js" }
+            }
+        }
+    });
+    assertEqual(Mcp.extractNpmPackageVersion(npmOutput, "mcp-remote"), "0.1.38", "extracts the installed npm version");
+    assertEqual(Mcp.extractNpmPackageInfo(npmOutput, "mcp-remote").executable, "/opt/npm/lib/node_modules/mcp-remote/dist/proxy.js", "extracts the checked executable path");
+    var shadowed = JSON.stringify({ dependencies: { "mcp-remote": { version: "0.1.38", path: "/tmp/package", bin: { "mcp-remote": "../shadow" } } } });
+    assertEqual(Mcp.extractNpmPackageInfo(shadowed, "mcp-remote").executable, "", "rejects an unexpected package executable layout");
+    assertEqual(Mcp.extractNpmPackageVersion("not json", "mcp-remote"), "", "rejects malformed npm output");
+    assertEqual(Mcp.extractNpmPackageVersion("{}", "mcp-remote"), "", "handles a missing package");
+})();
 
-    assertEqual(Mcp.isToolAllowed("search", names), true, "detects allowed tool");
-    assertEqual(Mcp.isToolAllowed("write_file", names), false, "rejects missing tool");
-    assertEqual(Mcp.isToolAllowed("", names), false, "rejects empty tool name");
+section("Mcp endpoint safety helpers");
+(function() {
+    assertEqual(Mcp.mcpUrlSafetyError("https://mcp.example.com/sse"), "", "accepts a credential-free HTTPS endpoint");
+    assert(Mcp.mcpUrlSafetyError("https://token@mcp.example.com/sse").length > 0, "rejects embedded URL credentials");
+    assert(Mcp.mcpUrlSafetyError("https://mcp.example.com/sse?token=secret").length > 0, "rejects query strings that would leak through argv");
+    assert(Mcp.mcpUrlSafetyError("https://mcp.example.com/sse#fragment").length > 0, "rejects URL fragments");
+    assertEqual(Mcp.isLoopbackHttpUrl("http://localhost:8811/sse"), true, "recognizes localhost HTTP");
+    assertEqual(Mcp.isLoopbackHttpUrl("http://127.0.0.1:8811/sse"), true, "recognizes IPv4 loopback HTTP");
+    assertEqual(Mcp.requiresInsecureHttpConsent("http://192.168.1.4:8811/sse"), true, "requires consent for remote HTTP");
+    assertEqual(Mcp.requiresInsecureHttpConsent("http://localhost:8811/sse"), false, "does not require extra consent for loopback HTTP");
+    assertEqual(Mcp.requiresInsecureHttpConsent("https://mcp.example.com/sse"), false, "does not require consent for HTTPS");
+})();
 
-    names = Mcp.setToolAllowed(["search"], "read_file", true);
-    assertEqual(names.length, 2, "adds allowed tool");
-    assertEqual(Mcp.isToolAllowed("read_file", names), true, "added tool is allowed");
-    names = Mcp.setToolAllowed(names, "search", false);
-    assertEqual(Mcp.isToolAllowed("search", names), false, "removes disallowed tool");
+section("Mcp advertised tool validation");
+(function() {
+    var valid = { name: "search.docs", inputSchema: { type: "object" } };
+    var duplicate = { name: "search.docs", description: "duplicate", inputSchema: { type: "object" } };
+    var invalidName = { name: "search docs", inputSchema: { type: "object" } };
+    var invalidSchema = { name: "bad_schema", inputSchema: { type: "array" } };
+    var taskOnly = { name: "task_only", inputSchema: { type: "object" }, execution: { taskSupport: "required" } };
+    var invalidMetadata = { name: "bad_metadata", description: { text: "not a string" }, inputSchema: { type: "object" } };
+    var tools = Mcp.sanitizeTools([valid, duplicate, invalidName, invalidSchema, taskOnly, invalidMetadata]);
+    assertEqual(tools.length, 1, "keeps only supported tools with unique names");
+    assertEqual(tools[0].name, "search.docs", "keeps the first valid tool contract");
 
-    names = Mcp.pruneAllowedTools(["search", "missing"], [{ name: "search" }, { name: "read_file" }]);
-    assertEqual(names.length, 1, "prunes unavailable allowed tools");
-    assertEqual(names[0], "search", "keeps available allowed tool");
+    var deep = { type: "object" };
+    var cursor = deep;
+    for (var i = 0; i < 40; i++) {
+        cursor.properties = { child: { type: "object" } };
+        cursor = cursor.properties.child;
+    }
+    assertEqual(Mcp.toolFingerprint({ name: "deep", inputSchema: deep }), "", "rejects excessively deep tool contracts");
 })();
 
 section("Mcp tool approval helpers");
@@ -1261,6 +1300,9 @@ section("Mcp tool approval helpers");
     assertEqual(Mcp.isToolApproved(searchTool, approvals), true, "approves current tool contract");
     assertEqual(Mcp.isToolApproved(sameSearchTool, approvals), true, "same contract stays approved");
     assertEqual(Mcp.isToolApproved(changedSearchTool, approvals), false, "changed tool contract is not approved");
+    var taskSearchTool = JSON.parse(JSON.stringify(searchTool));
+    taskSearchTool.execution = { taskSupport: "optional" };
+    assertEqual(Mcp.isToolApproved(taskSearchTool, approvals), false, "changed execution contract is not approved");
     assertEqual(Mcp.isToolApproved(searchTool, ["search"]), false, "name-only approval does not authorize a tool");
 
     var pruned = Mcp.pruneApprovedTools(approvals, [changedSearchTool]);
@@ -1273,9 +1315,12 @@ section("Mcp tool approval helpers");
 section("Mcp tool argument helpers");
 (function() {
     var parsed = Mcp.parseToolArguments('{"query":"ephemera"}');
-    assertEqual(parsed.query, "ephemera", "parses JSON argument string");
-    assertEqual(Object.keys(Mcp.parseToolArguments("not json")).length, 0, "invalid JSON arguments become empty object");
-    assertEqual(Object.keys(Mcp.parseToolArguments(["bad"])).length, 0, "array arguments become empty object");
+    assertEqual(parsed.valid, true, "accepts a JSON object argument string");
+    assertEqual(parsed.value.query, "ephemera", "parses JSON argument string");
+    assertEqual(Mcp.parseToolArguments("not json").valid, false, "invalid JSON arguments fail closed");
+    assertEqual(Mcp.parseToolArguments('["bad"]').valid, false, "JSON array arguments fail closed");
+    assertEqual(Mcp.parseToolArguments(["bad"]).valid, false, "array arguments fail closed");
+    assertEqual(Mcp.parseToolArguments(null).valid, true, "missing optional arguments become an empty object");
 
     var preview = Mcp.formatToolArguments({ query: "ephemera" }, 100);
     assert(preview.indexOf('"query": "ephemera"') >= 0, "formats object arguments as pretty JSON");

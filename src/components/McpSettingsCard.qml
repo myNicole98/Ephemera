@@ -2,11 +2,36 @@ import QtQuick
 import QtQuick.Controls
 import qs.Common
 import qs.Widgets
+import "../lib/Mcp.js" as Mcp
+import "../lib/Providers.js" as Providers
 
 SettingsCard {
     id: root
 
     required property var aiService
+    property string _urlError: ""
+
+    function commitMcpUrl() {
+        var url = mcpUrlField.text.trim();
+        if (!url) {
+            _urlError = "";
+            aiService.setMcpUrl("");
+            return false;
+        }
+        var validated = Providers.validateUrl(url);
+        if (!validated.valid) {
+            _urlError = validated.error || "Invalid MCP URL.";
+            return false;
+        }
+        var safetyError = Mcp.mcpUrlSafetyError(url);
+        if (safetyError) {
+            _urlError = safetyError;
+            return false;
+        }
+        _urlError = "";
+        aiService.setMcpUrl(url);
+        return true;
+    }
 
     // Header row
     Row {
@@ -82,7 +107,7 @@ SettingsCard {
             }
         }
 
-        // URL + bridge command fields
+        // MCP server configuration
         AccordionSection {
             show: aiService.mcpEnabled
 
@@ -140,26 +165,57 @@ SettingsCard {
                 width: parent.width
                 text: aiService.mcpUrl
                 placeholderText: "http://192.168.1.107:8811/sse"
-                onEditingFinished: {
-                    var url = text.trim();
-                    aiService.setMcpUrl(url);
-                }
+                onEditingFinished: root.commitMcpUrl()
             }
 
             StyledText {
-                text: "Bridge Command"
+                width: parent.width
+                text: root._urlError
+                visible: text.length > 0
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontSizeSmall
-                color: Theme.surfaceVariantText
+                color: Theme.error
+                wrapMode: Text.Wrap
             }
 
-            DankTextField {
-                id: mcpCommandField
+            Row {
                 width: parent.width
-                text: aiService.mcpCommand
-                placeholderText: "mcp-remote"
-                enabled: false
-                onEditingFinished: {
-                    aiService.setMcpCommand("mcp-remote");
+                spacing: Theme.spacingM
+                visible: Mcp.requiresInsecureHttpConsent(aiService.mcpUrl)
+
+                DankIcon {
+                    name: "warning"
+                    size: Theme.iconSize
+                    color: Theme.error
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Column {
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Theme.spacingXS
+                    width: parent.width - parent.spacing * 2 - Theme.iconSize - insecureHttpToggle.width
+
+                    StyledText {
+                        text: "Allow Unencrypted Remote HTTP"
+                        font.pixelSize: Theme.fontSizeMedium
+                        font.weight: Font.Medium
+                        color: Theme.surfaceText
+                    }
+
+                    StyledText {
+                        width: parent.width
+                        text: "Traffic can be intercepted. Use only on a trusted private network."
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.error
+                        wrapMode: Text.WordWrap
+                    }
+                }
+
+                Switch {
+                    id: insecureHttpToggle
+                    checked: aiService.mcpInsecureHttpAllowed
+                    anchors.verticalCenter: parent.verticalCenter
+                    onToggled: aiService.setMcpInsecureHttpAllowed(checked)
                 }
             }
 
@@ -176,8 +232,19 @@ SettingsCard {
                     }
                     iconName: aiService.mcpService.isConnected ? "refresh" : "link"
                     width: (parent.width - parent.spacing) / 2
-                    enabled: aiService.isOllama && !aiService.mcpService.connecting && aiService.mcpUrl.length > 0 && aiService.mcpCommand.length > 0
-                    onClicked: aiService.mcpService.reconnectToServer()
+                    enabled: {
+                        var pendingUrl = mcpUrlField.text.trim();
+                        var insecureConsentReady = pendingUrl === aiService.mcpUrl
+                            && aiService.mcpInsecureHttpAllowed;
+                        return aiService.isOllama
+                            && !aiService.mcpService.connecting
+                            && pendingUrl.length > 0
+                            && (!Mcp.requiresInsecureHttpConsent(pendingUrl) || insecureConsentReady);
+                    }
+                    onClicked: {
+                        if (root.commitMcpUrl())
+                            aiService.mcpService.reconnectToServer();
+                    }
                 }
 
                 DankButton {
@@ -211,6 +278,7 @@ SettingsCard {
                     anchors.centerIn: parent
                     width: parent.width - Theme.spacingS * 2
                     text: aiService.mcpService.connectionError
+                    textFormat: Text.PlainText
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.error
                     wrapMode: Text.Wrap
@@ -262,7 +330,7 @@ SettingsCard {
                     StyledText {
                         text: {
                             if (aiService.mcpService.isConnected)
-                                return "Connected · " + aiService.mcpService.tools.length + " tools";
+                                return "Connected · " + aiService.mcpService.tools.length + " tools · bridge " + aiService.mcpService.bridgeVersion;
                             if (aiService.mcpService.connecting) return "Connecting…";
                             return "Not connected";
                         }
@@ -277,6 +345,16 @@ SettingsCard {
                 }
             }
 
+            StyledText {
+                width: parent.width
+                visible: aiService.mcpService.ignoredToolCount > 0
+                text: aiService.mcpService.ignoredToolCount + " invalid or unsupported tools were ignored."
+                textFormat: Text.PlainText
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.surfaceVariantText
+                wrapMode: Text.WordWrap
+            }
+
             // Tool list
             AccordionSection {
                 show: aiService.mcpService.isConnected && aiService.mcpService.tools.length > 0
@@ -286,7 +364,7 @@ SettingsCard {
                     spacing: Theme.spacingXS
 
                     StyledText {
-                        text: "Allowed Tools"
+                        text: "Available MCP Tools"
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.surfaceVariantText
                     }
@@ -323,6 +401,7 @@ SettingsCard {
 
                                     StyledText {
                                         text: modelData.name
+                                        textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.family: Theme.monoFontFamily
                                         font.weight: Font.Medium
@@ -333,9 +412,12 @@ SettingsCard {
 
                                     StyledText {
                                         text: modelData.description || ""
+                                        textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontSizeSmall
                                         color: Theme.surfaceVariantText
                                         wrapMode: Text.WordWrap
+                                        maximumLineCount: 4
+                                        elide: Text.ElideRight
                                         width: parent.width
                                         visible: text.length > 0
                                     }
@@ -343,10 +425,10 @@ SettingsCard {
 
                                 Switch {
                                     id: toolAllowedToggle
-                                    checked: aiService.isMcpToolAllowed(modelData.name)
+                                    checked: aiService.isMcpToolApproved(modelData.name)
                                     enabled: aiService.isOllama && aiService.mcpService.isConnected
                                     anchors.verticalCenter: parent.verticalCenter
-                                    onToggled: aiService.setMcpToolAllowed(modelData.name, checked)
+                                    onToggled: aiService.setMcpToolApproved(modelData.name, checked)
                                 }
                             }
                         }

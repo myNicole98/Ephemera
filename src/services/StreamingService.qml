@@ -27,6 +27,8 @@ Item {
     property string _tagBuffer: ""
     property string _streamContent: ""
     property string _streamThinking: ""
+    property string _roundContent: ""
+    property string _roundThinking: ""
     property int _streamVariantIndex: 0
     property string _lastFinalizedStreamId: ""
     property bool _seenToolCalls: false
@@ -36,7 +38,7 @@ Item {
     property var mcpService: null
     property bool toolCallsAllowed: false
     property bool requireToolApproval: true
-    property var allowedToolApprovals: []
+    property var approvedToolContracts: []
     property var _conversationMessages: []
     property int _pendingCallId: -1
     property var _pendingToolCallMeta: null
@@ -95,6 +97,8 @@ Item {
         streamBuffer = "";
         _insideThinkTag = false;
         _tagBuffer = "";
+        _roundContent = "";
+        _roundThinking = "";
         if (messages)
             _conversationMessages = messages;
         pendingStdinBody = curlResult.body;
@@ -110,9 +114,9 @@ Item {
         // Flush any remaining tag buffer before clearing state
         if (_tagBuffer.length > 0) {
             if (_insideThinkTag)
-                _streamThinking += _tagBuffer;
+                _applyModelThinkingDelta(streamId, _tagBuffer);
             else
-                _streamContent += _tagBuffer;
+                _applyModelContentDelta(streamId, _tagBuffer);
             _tagBuffer = "";
         }
         _insideThinkTag = false;
@@ -138,7 +142,7 @@ Item {
             return false;
         var toolName = _pendingApprovalToolName;
         var message = reason || "Tool call rejected by user.";
-        _applyThinkingDelta(activeStreamId, "Tool rejected: " + toolName + "\n");
+        _appendToolAudit(activeStreamId, "Tool rejected: " + toolName + "\n");
         _recordToolResult(toolName, "Error: " + message);
         _clearPendingToolApproval();
         _executeNextToolCall();
@@ -155,6 +159,8 @@ Item {
         _apiOutputTokens = 0;
         _streamContent = "";
         _streamThinking = "";
+        _roundContent = "";
+        _roundThinking = "";
         _insideThinkTag = false;
         _tagBuffer = "";
         _clearToolState(true, "Stream reset.");
@@ -171,6 +177,8 @@ Item {
         lastRequestFailed = false;
         _streamContent = "";
         _streamThinking = "";
+        _roundContent = "";
+        _roundThinking = "";
         _apiOutputTokens = 0;
         _streamVariantIndex = variantIndex;
         _clearToolState(false, "");
@@ -228,7 +236,7 @@ Item {
             }
             if (delta.thinking) {
                 streamTokenCount++;
-                _applyThinkingDelta(activeStreamId, delta.thinking);
+                _applyModelThinkingDelta(activeStreamId, delta.thinking);
             }
             if (delta.content) {
                 streamTokenCount++;
@@ -237,11 +245,11 @@ Item {
                     _tagBuffer = tagResult.tagBuffer;
                     _insideThinkTag = tagResult.insideThinkTag;
                     for (var ti = 0; ti < tagResult.thinkingParts.length; ti++)
-                        _applyThinkingDelta(activeStreamId, tagResult.thinkingParts[ti]);
+                        _applyModelThinkingDelta(activeStreamId, tagResult.thinkingParts[ti]);
                     for (var ci = 0; ci < tagResult.contentParts.length; ci++)
-                        _applyContentDelta(activeStreamId, tagResult.contentParts[ci]);
+                        _applyModelContentDelta(activeStreamId, tagResult.contentParts[ci]);
                 } else {
-                    _applyContentDelta(activeStreamId, delta.content);
+                    _applyModelContentDelta(activeStreamId, delta.content);
                 }
             }
             if (delta.done) {
@@ -302,12 +310,10 @@ Item {
         var bodyText = parsed.body;
 
         if (isStreaming) {
-            if (_streamContent.length === 0 && bodyText && lastHttpStatus > 0 && lastHttpStatus < 400) {
+            if (_roundContent.length === 0 && bodyText && lastHttpStatus > 0 && lastHttpStatus < 400) {
                 var fallback = StreamParser.extractNonStreamingText(bodyText, provider);
-                if (fallback && fallback.length > 0) {
-                    _streamContent = fallback;
-                    streamContentUpdated(activeStreamId, fallback);
-                }
+                if (fallback && fallback.length > 0)
+                    _applyModelContentDelta(activeStreamId, fallback);
             }
         }
 
@@ -328,7 +334,7 @@ Item {
         }
 
         if (isStreaming && !_seenToolCalls) {
-            if (lastHttpStatus === 0 && _streamContent.length === 0) {
+            if (lastHttpStatus === 0 && _roundContent.length === 0) {
                 var providerName = _providerDisplayName();
                 var connMsg = provider === "ollama"
                     ? "Could not connect to Ollama.\nMake sure Ollama is running at " + ollamaUrl + "."
@@ -347,20 +353,26 @@ Item {
         }
         var toolCall = _pendingToolCalls.shift();
         var toolName = toolCall.function ? toolCall.function.name : toolCall.name;
-        var toolArgs = toolCall.function ? toolCall.function.arguments : toolCall.arguments;
-        toolArgs = Mcp.parseToolArguments(toolArgs);
+        var rawToolArgs = toolCall.function ? toolCall.function.arguments : toolCall.arguments;
         toolName = _toolCallName(toolCall, toolName);
         var blockMessage = _toolPermissionBlockMessage(toolName);
         if (blockMessage) {
             _markError(activeStreamId, blockMessage);
             return;
         }
-        var argumentsText = Mcp.formatToolArguments(toolArgs, 0);
-        var argumentBlockMessage = _toolArgumentBlockMessage(toolName, argumentsText);
+        var rawArgumentsText = Mcp.formatToolArguments(rawToolArgs, 0);
+        var argumentBlockMessage = _toolArgumentBlockMessage(toolName, rawArgumentsText);
         if (argumentBlockMessage) {
             _markError(activeStreamId, argumentBlockMessage);
             return;
         }
+        var parsedArgs = Mcp.parseToolArguments(rawToolArgs);
+        if (!parsedArgs.valid) {
+            _markError(activeStreamId, "MCP tool call blocked. Invalid arguments for '" + toolName + "': " + parsedArgs.error);
+            return;
+        }
+        var toolArgs = parsedArgs.value;
+        var argumentsText = Mcp.formatToolArguments(toolArgs, 0);
         if (!mcpService || !mcpService.isConnected) {
             _recordToolResult(toolName, "Error: MCP service not connected");
             _executeNextToolCall();
@@ -383,8 +395,8 @@ Item {
         if (!mcpService.isConnected) {
             return "MCP tool call blocked. MCP service is not connected.";
         }
-        if (!mcpService.isToolAllowed(toolName, allowedToolApprovals)) {
-            return "MCP tool call blocked. The tool '" + toolName + "' is not allowed in MCP settings.";
+        if (!mcpService.isToolApproved(toolName, approvedToolContracts)) {
+            return "MCP tool call blocked. The tool '" + toolName + "' is not approved in MCP settings.";
         }
         return "";
     }
@@ -401,7 +413,7 @@ Item {
         _pendingApprovalToolDescription = mcpService && mcpService.toolDescription ? mcpService.toolDescription(toolName) : "";
         _pendingApprovalToolArgs = toolArgs || {};
         _pendingApprovalToolArgumentsText = argumentsText || Mcp.formatToolArguments(toolArgs, 0);
-        _applyThinkingDelta(activeStreamId, "\nTool request awaiting approval: " + toolName + "\n");
+        _appendToolAudit(activeStreamId, "\nTool request awaiting approval: " + toolName + "\n");
     }
 
     function _invokeToolCall(toolName, toolArgs) {
@@ -410,6 +422,12 @@ Item {
             _markError(activeStreamId, blockMessage);
             return;
         }
+        var parsedArgs = Mcp.parseToolArguments(toolArgs);
+        if (!parsedArgs.valid) {
+            _markError(activeStreamId, "MCP tool call blocked. Invalid arguments for '" + toolName + "': " + parsedArgs.error);
+            return;
+        }
+        toolArgs = parsedArgs.value;
         var argumentBlockMessage = _toolArgumentBlockMessage(toolName, Mcp.formatToolArguments(toolArgs, 0));
         if (argumentBlockMessage) {
             _markError(activeStreamId, argumentBlockMessage);
@@ -420,7 +438,7 @@ Item {
             _executeNextToolCall();
             return;
         }
-        _applyThinkingDelta(activeStreamId, "\nCalling tool: " + toolName + "\n");
+        _appendToolAudit(activeStreamId, "\nCalling tool: " + toolName + "\n");
         var callId = mcpService.callTool(toolName, toolArgs);
         if (callId < 0) {
             _recordToolResult(toolName, "Error: MCP service not connected");
@@ -439,8 +457,7 @@ Item {
         _pendingCallId = -1;
         _pendingToolCallService = null;
         var resultText = (typeof result === "string") ? result : JSON.stringify(result);
-        var preview = resultText.substring(0, 200) + (resultText.length > 200 ? "..." : "");
-        _applyThinkingDelta(activeStreamId, "Tool result: " + preview + "\n");
+        _appendToolAudit(activeStreamId, "Tool completed: " + _pendingToolCallMeta.name + "\n");
         _recordToolResult(_pendingToolCallMeta.name, resultText);
         _pendingToolCallMeta = null;
         _executeNextToolCall();
@@ -451,7 +468,7 @@ Item {
         toolCallTimer.stop();
         _pendingCallId = -1;
         _pendingToolCallService = null;
-        _applyThinkingDelta(activeStreamId, "Tool error: " + error + "\n");
+        _appendToolAudit(activeStreamId, "Tool failed: " + (_pendingToolCallMeta ? _pendingToolCallMeta.name : "unknown_tool") + "\n");
         _recordToolResult(_pendingToolCallMeta ? _pendingToolCallMeta.name : "unknown_tool", "Error: " + error);
         _pendingToolCallMeta = null;
         _executeNextToolCall();
@@ -466,8 +483,8 @@ Item {
         _toolRoundCount++;
         var updatedMessages = Mcp.buildToolResumeMessages(
             _conversationMessages,
-            _streamContent,
-            _streamThinking,
+            _roundContent,
+            _roundThinking,
             _allToolCalls,
             _toolResults
         );
@@ -494,18 +511,27 @@ Item {
         }
     }
 
-    function _applyContentDelta(streamId, deltaText) {
+    function _applyModelContentDelta(streamId, deltaText) {
         if (!deltaText) return;
         if (streamStartTime === 0) streamStartTime = Date.now();
+        _roundContent += deltaText;
         _streamContent += deltaText;
         streamContentUpdated(streamId, deltaText);
     }
 
-    function _applyThinkingDelta(streamId, deltaText) {
+    function _applyModelThinkingDelta(streamId, deltaText) {
         if (!deltaText) return;
         if (streamStartTime === 0) streamStartTime = Date.now();
+        _roundThinking += deltaText;
         _streamThinking += deltaText;
         streamThinkingUpdated(streamId, deltaText);
+    }
+
+    function _appendToolAudit(streamId, text) {
+        if (!text) return;
+        if (streamStartTime === 0) streamStartTime = Date.now();
+        _streamThinking += text;
+        streamThinkingUpdated(streamId, text);
     }
 
     function _finalizeStream(streamId) {
@@ -513,9 +539,9 @@ Item {
 
         if (_tagBuffer.length > 0) {
             if (_insideThinkTag)
-                _applyThinkingDelta(streamId, _tagBuffer);
+                _applyModelThinkingDelta(streamId, _tagBuffer);
             else
-                _applyContentDelta(streamId, _tagBuffer);
+                _applyModelContentDelta(streamId, _tagBuffer);
             _tagBuffer = "";
         }
         _insideThinkTag = false;
@@ -530,6 +556,7 @@ Item {
 
     function _markError(streamId, message) {
         _streamContent = message;
+        _clearToolState(true, message);
         isStreaming = false;
         activeStreamId = "";
         lastRequestFailed = true;
@@ -581,7 +608,7 @@ Item {
             property int lastLen: 0
 
             onTextChanged: {
-                if (lastLen > 5242880) {
+                if (text.length > 5242880) {
                     chatFetcher.running = false;
                     root._markError(root.activeStreamId, "Response exceeded maximum buffer size (5 MB).");
                     return;

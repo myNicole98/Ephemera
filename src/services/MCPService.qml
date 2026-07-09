@@ -9,24 +9,42 @@ Item {
 
     // --- Configuration ---
     property string mcpUrl: ""
-    property string mcpCommand: "mcp-remote"
+    property bool allowInsecureHttp: false
     property bool enabled: false
 
     // --- State ---
     property bool isConnected: false
     property bool connecting: false
     property string connectionError: ""
-    property var tools: []          // Array of tool objects from tools/list
+    property string bridgeVersion: ""
+    property int ignoredToolCount: 0
+    property var tools: []
     property int _nextId: 1
-    property var _pendingRequests: ({})   // id -> { resolve, reject }
-    property string _readBuffer: ""
+    property var _pendingRequests: ({})
     property bool _initialized: false
-    property bool _manualDisconnect: false
     property string _negotiatedProtocolVersion: ""
-    readonly property int _connectionTimeoutMs: 15000
-    readonly property int _maxStdoutBytes: 5242880
-    readonly property string _preferredProtocolVersion: "2025-06-18"
-    readonly property var _supportedProtocolVersions: ["2025-06-18", "2024-11-05"]
+    property bool _listingTools: false
+    property bool _stopRequested: false
+    property bool _reconnectPending: false
+    property bool _versionProbeCancelled: false
+    property string _bridgeExecutable: ""
+    property string _bridgeDiagnostics: ""
+    property string _readBuffer: ""
+
+    readonly property int _connectionTimeoutMs: 60000
+    readonly property int _versionProbeTimeoutMs: 10000
+    readonly property int _maxMessageChars: 1048576
+    readonly property int _maxDiagnosticChars: 4096
+    readonly property int _maxToolPages: 16
+    readonly property int _maxTools: 128
+    readonly property int _maxToolsJsonChars: 1048576
+    readonly property int _maxCursorChars: 4096
+    readonly property string _minimumBridgeVersion: "0.1.16"
+    readonly property string _maximumBridgeVersionExclusive: "0.2.0"
+    readonly property string _preferredProtocolVersion: "2025-11-25"
+    readonly property var _supportedProtocolVersions: [
+        "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"
+    ]
 
     // --- Signals ---
     signal toolCallCompleted(var callId, string result)
@@ -37,8 +55,12 @@ Item {
     // --- Lifecycle ---
 
     Component.onDestruction: {
+        _reconnectPending = false;
+        _versionProbeCancelled = true;
+        if (bridgeVersionProbe.running)
+            bridgeVersionProbe.running = false;
         if (mcpProcess.running) {
-            _manualDisconnect = true;
+            _stopRequested = true;
             mcpProcess.running = false;
         }
     }
@@ -46,62 +68,76 @@ Item {
     // --- Public API ---
 
     function connectToServer() {
-        _manualDisconnect = false;
-        if (connecting || isConnected) return;
         if (!enabled) {
             connectionError = "";
             return;
         }
-        if (!mcpUrl || !mcpCommand) {
-            connectionError = "MCP URL and bridge command are required.";
+        if (isConnected || connecting)
+            return;
+        if (mcpProcess.running || bridgeVersionProbe.running) {
+            _reconnectPending = true;
             return;
         }
-        var validated = Providers.validateUrl(mcpUrl);
-        if (!validated.valid) {
-            connectionError = validated.error || "Invalid MCP URL.";
+
+        var error = _configurationError();
+        if (error) {
+            connectionError = error;
             return;
         }
-        if (!_validCommand(mcpCommand)) {
-            connectionError = "MCP bridge command must be exactly mcp-remote.";
-            return;
-        }
+
         connectionError = "";
         connecting = true;
-        _initialized = false;
-        _readBuffer = "";
-        _pendingRequests = ({});
-        _nextId = 1;
         tools = [];
-        mcpStdout.lastLen = 0;
-        connectionTimer.restart();
+        ignoredToolCount = 0;
+        mcpConnectionStateChanged();
 
-        var cmd = [mcpCommand, mcpUrl];
-        if (mcpUrl.toLowerCase().indexOf("http://") === 0)
-            cmd.push("--allow-http");
-        mcpProcess.command = cmd;
-        mcpProcess.running = true;
+        _startVersionProbe();
     }
 
     function disconnectFromServer() {
         connectionError = "";
+        _reconnectPending = false;
+        _versionProbeCancelled = true;
+        if (bridgeVersionProbe.running)
+            bridgeVersionProbe.running = false;
         if (mcpProcess.running) {
-            _manualDisconnect = true;
+            _stopRequested = true;
             mcpProcess.running = false;
-        } else {
-            _manualDisconnect = false;
         }
         _reset("MCP disconnected.");
     }
 
     function reconnectToServer() {
-        disconnectFromServer();
+        if (!enabled)
+            return;
+        connectionError = "";
+        _reconnectPending = true;
+        _versionProbeCancelled = true;
+
+        if (bridgeVersionProbe.running) {
+            bridgeVersionProbe.running = false;
+            _reset("MCP reconnecting.");
+            return;
+        }
+        if (mcpProcess.running) {
+            _stopRequested = true;
+            mcpProcess.running = false;
+            _reset("MCP reconnecting.");
+            return;
+        }
+
+        _reconnectPending = false;
+        _reset("MCP reconnecting.");
         Qt.callLater(connectToServer);
     }
 
-    // Call a tool by name with arguments. Returns the request id.
+    // Call a tool by name with validated object arguments. Returns the request id.
     function callTool(toolName, args) {
-        if (!isConnected || !_findTool(toolName))
+        if (!isConnected || _listingTools || !_findTool(toolName))
             return -1;
+        if (!args || typeof args !== "object" || Array.isArray(args))
+            return -1;
+
         var id = _nextId++;
         _pendingRequests[id] = {
             resolve: function(result) {
@@ -121,17 +157,18 @@ Item {
             method: "tools/call",
             params: {
                 name: toolName,
-                arguments: args || {}
+                arguments: args
             }
         };
-        _sendRequest(id, req);
+        if (!_writeMessage(req)) {
+            delete _pendingRequests[id];
+            return -1;
+        }
         return id;
     }
 
     function cancelRequest(id, reason) {
-        if (id === undefined || id === null)
-            return false;
-        if (!_pendingRequests[id])
+        if (id === undefined || id === null || !_pendingRequests[id])
             return false;
         delete _pendingRequests[id];
         if (mcpProcess.running)
@@ -142,55 +179,136 @@ Item {
         return true;
     }
 
-    function isToolAllowed(toolName, approvedKeys) {
+    function isToolApproved(toolName, approvedKeys) {
         return Mcp.isToolApproved(_findTool(toolName), approvedKeys);
     }
 
-    function setToolAllowed(approvedKeys, toolName, allowed) {
+    function setToolApproved(approvedKeys, toolName, approved) {
         var current = Mcp.pruneApprovedTools(approvedKeys, tools);
         var tool = _findTool(toolName);
         if (!tool)
             return current;
-        return Mcp.setToolApproved(current, tool, allowed === true);
+        return Mcp.setToolApproved(current, tool, approved === true);
     }
 
     function toolDescription(toolName) {
         var tool = _findTool(toolName);
-        if (!tool)
-            return "";
-        return String(tool.description || tool.title || "");
+        return tool ? String(tool.description || tool.title || "") : "";
     }
 
-    // Get tools formatted for Ollama /api/chat tools array
+    // Get approved tools formatted for the Ollama /api/chat tools array.
     function getOllamaTools(approvedKeys) {
         var result = [];
         for (var i = 0; i < tools.length; i++) {
-            var t = tools[i];
-            if (!Mcp.isToolApproved(t, approvedKeys))
+            var tool = tools[i];
+            if (!Mcp.isToolApproved(tool, approvedKeys))
                 continue;
             result.push({
                 type: "function",
                 function: {
-                    name: t.name,
-                    description: t.description || "",
-                    parameters: t.inputSchema || { type: "object", properties: {} }
+                    name: tool.name,
+                    description: tool.description || "",
+                    parameters: tool.inputSchema
                 }
             });
         }
         return result;
     }
 
-    // --- Internal ---
+    // --- Internal: lifecycle and dependency gate ---
 
-    function _validCommand(command) {
-        var c = String(command || "").trim();
-        return c === "mcp-remote";
+    function _configurationError() {
+        if (!mcpUrl)
+            return "MCP server URL is required.";
+        var validated = Providers.validateUrl(mcpUrl);
+        if (!validated.valid)
+            return validated.error || "Invalid MCP URL.";
+        var safetyError = Mcp.mcpUrlSafetyError(mcpUrl);
+        if (safetyError)
+            return safetyError;
+        if (Mcp.requiresInsecureHttpConsent(mcpUrl) && !allowInsecureHttp)
+            return "Remote HTTP MCP requires explicit insecure transport consent.";
+        return "";
+    }
+
+    function _startVersionProbe() {
+        _versionProbeCancelled = false;
+        bridgeVersionTimer.restart();
+        bridgeVersionProbe.command = [
+            "npm", "list", "--global", "--json", "--long", "--depth=0", "mcp-remote"
+        ];
+        bridgeVersionProbe.running = true;
+    }
+
+    function _handleVersionProbeFinished(output) {
+        bridgeVersionTimer.stop();
+        if (_versionProbeCancelled) {
+            _versionProbeCancelled = false;
+            _resumePendingReconnect();
+            return;
+        }
+
+        var packageInfo = Mcp.extractNpmPackageInfo(output, "mcp-remote");
+        var version = packageInfo.version;
+        if (!version || !packageInfo.executable) {
+            _dependencyError("mcp-remote is not installed globally in a supported npm layout. Install a 0.1.x release at version 0.1.16 or newer.");
+            return;
+        }
+        if (!Mcp.isVersionInRange(version, _minimumBridgeVersion,
+                                  _maximumBridgeVersionExclusive)) {
+            _dependencyError("mcp-remote " + version + " is unsupported. Use a stable 0.1.x release from " + _minimumBridgeVersion + " onward.");
+            return;
+        }
+
+        bridgeVersion = version;
+        _bridgeExecutable = packageInfo.executable;
+        _startBridge();
+    }
+
+    function _dependencyError(message) {
+        connectionError = message;
+        _reset(message);
+    }
+
+    function _startBridge() {
+        var error = _configurationError();
+        if (!enabled || error) {
+            connectionError = error;
+            _reset(error || "MCP disabled.");
+            return;
+        }
+
+        _initialized = false;
+        _pendingRequests = ({});
+        _nextId = 1;
+        _listingTools = false;
+        _bridgeDiagnostics = "";
+        _readBuffer = "";
+        tools = [];
+        connectionTimer.restart();
+
+        if (!_bridgeExecutable) {
+            _dependencyError("The verified mcp-remote executable is unavailable.");
+            return;
+        }
+        var command = [_bridgeExecutable, mcpUrl];
+        if (/^http:\/\//i.test(mcpUrl))
+            command.push("--allow-http");
+        mcpProcess.command = command;
+        mcpProcess.running = true;
+    }
+
+    function _resumePendingReconnect() {
+        if (!_reconnectPending)
+            return;
+        _reconnectPending = false;
+        Qt.callLater(connectToServer);
     }
 
     function _supportsProtocolVersion(version) {
-        var v = String(version || "");
+        var value = String(version || "");
         for (var i = 0; i < _supportedProtocolVersions.length; i++) {
-            if (_supportedProtocolVersions[i] === v)
+            if (_supportedProtocolVersions[i] === value)
                 return true;
         }
         return false;
@@ -208,43 +326,47 @@ Item {
 
     function _abortConnection(message) {
         connectionError = message;
+        _reconnectPending = false;
+        _versionProbeCancelled = true;
+        if (bridgeVersionProbe.running)
+            bridgeVersionProbe.running = false;
         if (mcpProcess.running) {
-            _manualDisconnect = true;
+            _stopRequested = true;
             mcpProcess.running = false;
         }
         _reset(message);
     }
 
-    function _failPendingRequests(message) {
+    function _reset(failMessage) {
         var pending = _pendingRequests;
         _pendingRequests = ({});
-        for (var id in pending) {
-            if (pending[id] && pending[id].reject)
-                pending[id].reject(message);
-        }
-    }
-
-    function _reset(failMessage) {
-        if (failMessage)
-            _failPendingRequests(failMessage);
-        else
-            _pendingRequests = ({});
         connectionTimer.stop();
+        bridgeVersionTimer.stop();
         isConnected = false;
         connecting = false;
         _initialized = false;
+        _listingTools = false;
         _negotiatedProtocolVersion = "";
         _readBuffer = "";
         tools = [];
+        ignoredToolCount = 0;
         mcpConnectionStateChanged();
+
+        if (failMessage) {
+            for (var id in pending) {
+                if (pending[id] && pending[id].reject)
+                    pending[id].reject(failMessage);
+            }
+        }
     }
 
-    function _writeMessage(msg) {
-        mcpProcess.write(JSON.stringify(msg) + "\n");
-    }
+    // --- Internal: JSON-RPC ---
 
-    function _sendRequest(id, req) {
-        _writeMessage(req);
+    function _writeMessage(message) {
+        if (!mcpProcess.running)
+            return false;
+        mcpProcess.write(JSON.stringify(message) + "\n");
+        return true;
     }
 
     function _sendResponse(id, result) {
@@ -255,56 +377,70 @@ Item {
         _writeMessage({
             jsonrpc: "2.0",
             id: id,
-            error: {
-                code: code,
-                message: message
-            }
+            error: { code: code, message: message }
         });
     }
 
     function _sendNotification(method, params) {
-        var msg = { jsonrpc: "2.0", method: method };
-        if (params) msg.params = params;
-        _writeMessage(msg);
+        var message = { jsonrpc: "2.0", method: method };
+        if (params) message.params = params;
+        _writeMessage(message);
+    }
+
+    function _handleStdoutChunk(data) {
+        _readBuffer += String(data || "");
+        var lines = _readBuffer.split("\n");
+        _readBuffer = lines.pop();
+        if (_readBuffer.length > _maxMessageChars) {
+            _abortConnection("MCP message exceeded the size limit.");
+            return;
+        }
+        for (var i = 0; i < lines.length; i++) {
+            if (lines[i].length > _maxMessageChars) {
+                _abortConnection("MCP message exceeded the size limit.");
+                return;
+            }
+            _handleLine(lines[i]);
+        }
     }
 
     function _handleLine(line) {
-        line = line.trim();
-        if (!line) return;
+        var value = String(line || "").trim();
+        if (!value) return;
 
-        var msg;
+        var message;
         try {
-            msg = JSON.parse(line);
+            message = JSON.parse(value);
         } catch (e) {
-            // Not JSON — could be mcp-remote status output, ignore
+            return;
+        }
+        if (!message || message.jsonrpc !== "2.0")
+            return;
+
+        if (message.method && message.id !== undefined && message.id !== null) {
+            _handleRequest(message.id, message.method, message.params);
             return;
         }
 
-        // Server request. We do not advertise optional client capabilities, so
-        // unsupported requests are rejected explicitly instead of disappearing.
-        if (msg.method && msg.id !== undefined && msg.id !== null) {
-            _handleRequest(msg.id, msg.method, msg.params);
-            return;
-        }
-
-        // Response to one of our requests
-        if (msg.id !== undefined && msg.id !== null) {
-            var pending = _pendingRequests[msg.id];
+        if (message.id !== undefined && message.id !== null) {
+            if (typeof message.id !== "number" || !isFinite(message.id)
+                    || Math.floor(message.id) !== message.id || message.id < 1)
+                return;
+            var pending = _pendingRequests[message.id];
             if (pending) {
-                delete _pendingRequests[msg.id];
-                if (msg.error) {
-                    pending.reject(msg.error.message || JSON.stringify(msg.error));
-                } else {
-                    pending.resolve(msg.result);
-                }
+                delete _pendingRequests[message.id];
+                if (message.error)
+                    pending.reject(message.error.message || JSON.stringify(message.error));
+                else if (message.result !== undefined)
+                    pending.resolve(message.result);
+                else
+                    pending.reject("Invalid JSON-RPC response.");
             }
             return;
         }
 
-        // Server notification
-        if (msg.method) {
-            _handleNotification(msg.method, msg.params);
-        }
+        if (message.method)
+            _handleNotification(message.method, message.params);
     }
 
     function _handleRequest(id, method, params) {
@@ -316,28 +452,26 @@ Item {
     }
 
     function _handleNotification(method, params) {
-        // Handle server-initiated notifications if needed
-        if (method === "notifications/tools/list_changed") {
-            _listTools();
-        }
+        if (method === "notifications/tools/list_changed" && !_listingTools)
+            _beginListTools();
     }
 
     function _sendInitialize() {
+        if (!connecting || !mcpProcess.running)
+            return;
         var id = _nextId++;
         _pendingRequests[id] = {
             resolve: function(result) { _onInitialized(result); },
-            reject: function(err) {
-                _abortConnection("Initialize failed: " + err);
-            }
+            reject: function(err) { _abortConnection("Initialize failed: " + err); }
         };
-        _sendRequest(id, {
+        _writeMessage({
             jsonrpc: "2.0",
             id: id,
             method: "initialize",
             params: {
                 protocolVersion: _preferredProtocolVersion,
                 capabilities: {},
-                clientInfo: { name: "ephemera", version: "1.0.0" }
+                clientInfo: { name: "ephemera", version: "1.1.0" }
             }
         });
     }
@@ -348,64 +482,156 @@ Item {
             _abortConnection("Unsupported MCP protocol version: " + (version || "unknown") + ".");
             return;
         }
-        if (!result || !result.capabilities || result.capabilities.tools === undefined) {
+        var toolCapabilities = result && result.capabilities && result.capabilities.tools;
+        if (!toolCapabilities || typeof toolCapabilities !== "object"
+                || Array.isArray(toolCapabilities)) {
             _abortConnection("MCP server does not advertise tools capability.");
             return;
         }
         _negotiatedProtocolVersion = version;
         _sendNotification("notifications/initialized");
         _initialized = true;
-        _listTools();
+        _beginListTools();
     }
 
-    function _listTools(cursor, accumulated) {
+    // --- Internal: bounded tool discovery ---
+
+    function _beginListTools() {
+        if (_listingTools || !_initialized)
+            return;
+        _listingTools = true;
+        if (isConnected) {
+            isConnected = false;
+            connecting = true;
+            tools = [];
+            ignoredToolCount = 0;
+            mcpConnectionStateChanged();
+        }
+        connectionTimer.restart();
+        _listToolsPage("", [], ({}), 0);
+    }
+
+    function _listToolsPage(cursor, accumulated, seenCursors, pageCount) {
+        if (pageCount >= _maxToolPages) {
+            _abortConnection("MCP tool list exceeded the page limit.");
+            return;
+        }
+
+        var cursorValue = String(cursor || "");
+        if (cursorValue) {
+            var cursorKey = "$" + cursorValue;
+            if (seenCursors[cursorKey]) {
+                _abortConnection("MCP tool list repeated a pagination cursor.");
+                return;
+            }
+            seenCursors[cursorKey] = true;
+        }
+
         var id = _nextId++;
         var collected = Array.isArray(accumulated) ? accumulated.slice() : [];
         _pendingRequests[id] = {
             resolve: function(result) {
-                var page = Mcp.appendToolsPage(collected, result);
-                if (page.nextCursor) {
-                    _listTools(page.nextCursor, page.tools);
+                if (!result || !Array.isArray(result.tools)) {
+                    _abortConnection("MCP server returned an invalid tool list.");
                     return;
                 }
-                tools = page.tools;
+                if (result.nextCursor !== undefined && result.nextCursor !== null
+                        && typeof result.nextCursor !== "string") {
+                    _abortConnection("MCP server returned an invalid pagination cursor.");
+                    return;
+                }
+                var page = Mcp.appendToolsPage(collected, result);
+                if (page.tools.length > _maxTools) {
+                    _abortConnection("MCP server advertised too many tools.");
+                    return;
+                }
+
+                var serialized = "";
+                try { serialized = JSON.stringify(page.tools); }
+                catch (e) {
+                    _abortConnection("MCP server returned an invalid tool schema.");
+                    return;
+                }
+                if (serialized.length > _maxToolsJsonChars) {
+                    _abortConnection("MCP tool schemas exceeded the size limit.");
+                    return;
+                }
+
+                if (page.nextCursor.length > _maxCursorChars) {
+                    _abortConnection("MCP pagination cursor exceeded the size limit.");
+                    return;
+                }
+                if (page.nextCursor) {
+                    _listToolsPage(page.nextCursor, page.tools, seenCursors, pageCount + 1);
+                    return;
+                }
+
+                var supported = Mcp.sanitizeTools(page.tools);
+                ignoredToolCount = page.tools.length - supported.length;
+                tools = supported;
+                _listingTools = false;
                 isConnected = true;
                 connecting = false;
                 connectionError = "";
+                connectionTimer.stop();
                 mcpConnectionStateChanged();
                 mcpToolsUpdated();
-                connectionTimer.stop();
             },
             reject: function(err) {
                 _abortConnection("Failed to list tools: " + err);
             }
         };
-        _sendRequest(id, {
+        _writeMessage({
             jsonrpc: "2.0",
             id: id,
             method: "tools/list",
-            params: cursor ? { cursor: cursor } : {}
+            params: cursorValue ? { cursor: cursorValue } : {}
         });
     }
 
-    function _processBuffer() {
-        var lines = _readBuffer.split("\n");
-        // Last element may be incomplete — keep it in the buffer
-        _readBuffer = lines.pop();
-        for (var i = 0; i < lines.length; i++) {
-            _handleLine(lines[i]);
-        }
+    function _appendDiagnostic(line) {
+        var value = String(line || "").trim();
+        if (!value) return;
+        _bridgeDiagnostics = (_bridgeDiagnostics + "\n" + value).slice(-_maxDiagnosticChars);
     }
 
-    // --- Process ---
+    // --- Timers ---
+
+    Timer {
+        id: bridgeVersionTimer
+        interval: root._versionProbeTimeoutMs
+        repeat: false
+        onTriggered: {
+            root._versionProbeCancelled = true;
+            if (bridgeVersionProbe.running)
+                bridgeVersionProbe.running = false;
+            root._dependencyError("Timed out while checking the installed mcp-remote version.");
+        }
+    }
 
     Timer {
         id: connectionTimer
         interval: root._connectionTimeoutMs
         repeat: false
-        onTriggered: {
-            root._abortConnection("MCP connection timed out.");
+        onTriggered: root._abortConnection("MCP connection timed out.")
+    }
+
+    // --- Processes ---
+
+    Process {
+        id: bridgeVersionProbe
+        running: false
+
+        stdout: StdioCollector {
+            id: bridgeVersionOutput
+            waitForEnd: true
         }
+
+        stderr: StdioCollector {
+            waitForEnd: true
+        }
+
+        onExited: exitCode => root._handleVersionProbeFinished(bridgeVersionOutput.text)
     }
 
     Process {
@@ -413,47 +639,37 @@ Item {
         running: false
         stdinEnabled: true
 
-        onRunningChanged: {
-            if (running) {
-                // Send initialize once the process starts
-                Qt.callLater(root._sendInitialize);
-            } else {
-                if (!root._manualDisconnect && (root.isConnected || root.connecting)) {
-                    root.connectionError = "MCP process exited unexpectedly.";
-                    root._reset(root.connectionError);
-                }
-            }
+        onStarted: root._sendInitialize()
+
+        stdout: SplitParser {
+            splitMarker: ""
+            onRead: data => root._handleStdoutChunk(data)
         }
 
-        stdout: StdioCollector {
-            id: mcpStdout
-            waitForEnd: false
-            property int lastLen: 0
-
-            onTextChanged: {
-                if (text.length > root._maxStdoutBytes) {
-                    root.connectionError = "MCP output exceeded maximum buffer size.";
-                    mcpProcess.running = false;
-                    root._reset(root.connectionError);
-                    return;
-                }
-                var newData = text.substring(lastLen);
-                lastLen = text.length;
-                root._readBuffer += newData;
-                root._processBuffer();
-            }
+        stderr: SplitParser {
+            splitMarker: ""
+            onRead: data => root._appendDiagnostic(data)
         }
 
-        onExited: exitCode => {
-            if (root._manualDisconnect) {
-                root._manualDisconnect = false;
-                root._reset("MCP disconnected.");
-                return;
+        onExited: (exitCode, exitStatus) => {
+            var expected = root._stopRequested;
+            var reconnect = root._reconnectPending;
+            root._stopRequested = false;
+
+            if (!expected && (root.isConnected || root.connecting)) {
+                var message = "MCP process exited unexpectedly";
+                if (exitCode !== 0)
+                    message += " with code " + exitCode;
+                message += ".";
+                var diagnostic = root._bridgeDiagnostics.trim();
+                if (diagnostic)
+                    message += "\n" + diagnostic.slice(-600);
+                root.connectionError = message;
+                root._reset(message);
             }
-            if (exitCode !== 0 && (root.isConnected || root.connecting)) {
-                root.connectionError = "MCP process exited with code " + exitCode + ".";
-            }
-            root._reset(root.connectionError || "MCP process exited.");
+
+            if (reconnect)
+                root._resumePendingReconnect();
         }
     }
 }

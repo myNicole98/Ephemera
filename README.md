@@ -18,6 +18,7 @@ Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plug
 - **Streaming responses** — real-time token-by-token output via SSE
 - **Thinking/reasoning display** — collapsible thinking section for models that emit `<think>` tags (Qwen3, DeepSeek via Ollama) or explicit `reasoning_content` fields (DeepSeek via OpenAI-compatible providers); thinking and generating phases shown with distinct dot colors
 - **Ollama auto-management** — automatically starts `ollama serve` if not running, discovers available models, and re-checks connectivity each time the panel opens
+- **MCP tools for Ollama** — connect a remote MCP server through a version-checked bridge, expose only explicitly approved tool contracts, and confirm every invocation with its complete arguments
 - **Markdown rendering** — assistant responses rendered as rich text with code blocks, tables, lists, and blockquotes (deferred until streaming completes for performance)
 - **System prompt presets** — quick-select presets (Concise, Code Expert, Translator, Writing Editor) or write a custom system prompt
 - **Regenerate with variant pagination** — retry the last assistant response with a single click; previous responses are preserved and navigable with `< 1/2 >` pagination arrows (ChatGPT-style), even mid-stream; each variant remembers which model generated it, so switching models between regenerations shows the correct model chip per variant
@@ -25,7 +26,7 @@ Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plug
 - **Export conversation** — copy the full conversation as markdown to clipboard, or save to a `.md` file in your home directory
 - **Optional persistence** — messages are ephemeral by default; enable **Save Chat History** in settings to persist conversations across sessions (API keys are never stored)
 - **System keyring integration** — store API keys encrypted in GNOME Keyring / KDE Wallet / KeePassXC via `secret-tool`; env vars as fallback; keyring UI hidden gracefully when `secret-tool` is not installed
-- **Security-first** — API keys stored encrypted in the system keyring (never by PluginService), request bodies sent via stdin (never in `/proc/cmdline`), API keys passed as headers (not URL params), link text and URLs HTML-escaped, link scheme restricted to http/https, custom URLs validated, stdout buffer capped at 5 MB
+- **Security-first** — API keys stored encrypted in the system keyring (never by PluginService), request bodies sent via stdin (never in `/proc/cmdline`), API keys passed as headers (not URL params), MCP calls require per-tool and per-call approval, link schemes are restricted, URLs are validated, and process output is bounded
 
 ## Requirements
 
@@ -34,6 +35,7 @@ Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plug
 - `wl-copy` from [wl-clipboard](https://github.com/bugaevc/wl-clipboard) (for the copy button)
 - `secret-tool` from [libsecret](https://wiki.gnome.org/Projects/Libsecret) (optional — for storing API keys in the system keyring)
 - For Ollama: [Ollama](https://ollama.com) installed and at least one model pulled
+- For MCP tools: Node.js 18+, npm, and a global `mcp-remote` 0.1.x installation at version 0.1.16 or newer
 
 ## Installation
 
@@ -76,6 +78,20 @@ If `secret-tool` is not installed, or you prefer env vars, set them before start
 | Custom     | `EPHEMERA_API_KEY`    |
 | Ollama     | *(none required)*     |
 
+### MCP Tools
+
+MCP tool calling is available only with the Ollama provider. Install the tested bridge release globally:
+
+```bash
+npm install --global mcp-remote@0.1.38
+```
+
+Ephemera checks the installed package and exact executable before every connection. It accepts stable 0.1.x releases from 0.1.16 onward and refuses older or untested release lines. Configure the server under **Settings → MCP Tools**, approve the individual tool contracts that may be shown to the model, then enable model tool requests. Every invocation still requires a separate confirmation showing the server, tool, and complete arguments.
+
+HTTPS is the default for remote servers. Plain HTTP is accepted automatically only for loopback addresses; other HTTP endpoints require a separate warning toggle and should be used only on a trusted private network. Endpoint URLs cannot contain embedded credentials, query strings, or fragments because `mcp-remote` receives the URL as a process argument.
+
+`mcp-remote` performs OAuth when required and stores its OAuth session under `~/.mcp-auth`. Those credentials are managed by the bridge, not by Ephemera or PluginService.
+
 ### Settings
 
 All settings are configurable from the in-app settings panel (tune icon):
@@ -93,6 +109,7 @@ All settings are configurable from the in-app settings panel (tune icon):
 - **Request Timeout** — max time for a streaming response (30–600s, default 300s)
 - **Ollama Controls** — refresh models button, explicit start/stop button, idle auto-stop timeout (Never, 5, 10, 15, or 30 minutes; only auto-stops Ollama if the plugin started it)
 - **Save Chat History** — persist conversations across sessions (off by default)
+- **MCP Tools** — Ollama-only server connection, transport consent, per-contract exposure controls, and per-call confirmation
 
 Settings are persisted via Quickshell's `PluginService`. API keys are stored only in the system keyring, never by PluginService.
 

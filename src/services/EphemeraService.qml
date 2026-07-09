@@ -55,13 +55,15 @@ Item {
     property bool mcpAllowToolRequests: false
     property string mcpToolRequestsTrustKey: ""
     property string mcpUrl: ""
-    property string mcpCommand: "mcp-remote"
-    property var mcpAllowedTools: []
-    property string mcpAllowedToolsTrustKey: ""
+    property bool mcpAllowInsecureHttp: false
+    property string mcpInsecureHttpTrustKey: ""
+    property var mcpApprovedToolContracts: []
+    property string mcpApprovedToolsTrustKey: ""
     property alias mcpService: mcpServiceInstance
-    readonly property string mcpTrustKey: Mcp.trustKey(mcpUrl, mcpCommand)
+    readonly property string mcpTrustKey: Mcp.trustKey(mcpUrl, "mcp-remote")
     readonly property bool mcpToolRequestsAllowed: isOllama && mcpEnabled && mcpAllowToolRequests && mcpToolRequestsTrustKey === mcpTrustKey
-    readonly property var activeMcpAllowedTools: mcpAllowedToolsTrustKey === mcpTrustKey ? mcpAllowedTools : []
+    readonly property bool mcpInsecureHttpAllowed: mcpAllowInsecureHttp && mcpInsecureHttpTrustKey === mcpTrustKey
+    readonly property var activeMcpToolApprovals: mcpApprovedToolsTrustKey === mcpTrustKey ? mcpApprovedToolContracts : []
 
     // --- Ollama (delegated to OllamaManager) ---
     property alias availableModels: ollamaManager.availableModels
@@ -118,7 +120,7 @@ Item {
         streamingService.resetErrorState();
         if (_keyringAvailable)
             keyringService.refreshKeyringKey();
-        if (isOllama && mcpEnabled && mcpUrl && mcpCommand)
+        if (isOllama && mcpEnabled && mcpUrl)
             mcpServiceInstance.connectToServer();
         else
             mcpServiceInstance.disconnectFromServer();
@@ -134,11 +136,11 @@ Item {
     MCPService {
         id: mcpServiceInstance
         mcpUrl: root.mcpUrl
-        mcpCommand: root.mcpCommand
+        allowInsecureHttp: root.mcpInsecureHttpAllowed
         enabled: root.isOllama && root.mcpEnabled
         onToolCallCompleted: (callId, result) => streamingService._onToolCallCompleted(callId, result)
         onToolCallFailed: (callId, error) => streamingService._onToolCallFailed(callId, error)
-        onMcpToolsUpdated: root._pruneMcpAllowedTools()
+        onMcpToolsUpdated: root._pruneMcpToolApprovals()
     }
 
     StreamingService {
@@ -155,7 +157,7 @@ Item {
         mcpService: root.mcpToolRequestsAllowed ? mcpServiceInstance : null
         toolCallsAllowed: root.mcpToolRequestsAllowed
         requireToolApproval: true
-        allowedToolApprovals: root.activeMcpAllowedTools
+        approvedToolContracts: root.activeMcpToolApprovals
         onStreamToolRoundReady: (streamId, messages) => root._launchCurlWithMessages(messages)
     }
 
@@ -230,12 +232,22 @@ Item {
         mcpAllowToolRequests = PluginService.loadPluginData(pluginId, "mcpToolRequestsAllowed", PluginService.loadPluginData(pluginId, "mcpAutoExecuteTools", false)) === true;
         mcpToolRequestsTrustKey = String(PluginService.loadPluginData(pluginId, "mcpToolRequestsTrustKey", PluginService.loadPluginData(pluginId, "mcpAutoExecuteTrustKey", "")));
         mcpUrl = String(PluginService.loadPluginData(pluginId, "mcpUrl", "")).trim();
-        mcpCommand = String(PluginService.loadPluginData(pluginId, "mcpCommand", "mcp-remote")).trim() || "mcp-remote";
-        if (mcpCommand !== "mcp-remote")
-            mcpCommand = "mcp-remote";
-        mcpAllowedTools = Mcp.normalizeToolApprovalKeys(PluginService.loadPluginData(pluginId, "mcpAllowedTools", "[]"));
-        mcpAllowedToolsTrustKey = String(PluginService.loadPluginData(pluginId, "mcpAllowedToolsTrustKey", ""));
-        if (isOllama && mcpEnabled && mcpUrl && mcpCommand)
+        mcpAllowInsecureHttp = PluginService.loadPluginData(pluginId, "mcpAllowInsecureHttp", false) === true;
+        mcpInsecureHttpTrustKey = String(PluginService.loadPluginData(pluginId, "mcpInsecureHttpTrustKey", ""));
+        mcpApprovedToolContracts = Mcp.normalizeToolApprovalKeys(PluginService.loadPluginData(
+            pluginId,
+            "mcpApprovedToolContracts",
+            PluginService.loadPluginData(pluginId, "mcpAllowedTools", "[]")
+        ));
+        mcpApprovedToolsTrustKey = String(PluginService.loadPluginData(
+            pluginId,
+            "mcpApprovedToolsTrustKey",
+            PluginService.loadPluginData(pluginId, "mcpAllowedToolsTrustKey", "")
+        ));
+        var legacyMcpToken = String(PluginService.loadPluginData(pluginId, "mcpToken", ""));
+        if (legacyMcpToken)
+            PluginService.savePluginData(pluginId, "mcpToken", "");
+        if (isOllama && mcpEnabled && mcpUrl)
             mcpServiceInstance.connectToServer();
         else
             mcpServiceInstance.disconnectFromServer();
@@ -277,11 +289,11 @@ Item {
         var allowed = enabled === true;
         mcpAllowToolRequests = allowed;
         mcpToolRequestsTrustKey = allowed ? mcpTrustKey : "";
-        if (allowed && mcpAllowedToolsTrustKey !== mcpTrustKey) {
-            mcpAllowedTools = [];
-            mcpAllowedToolsTrustKey = mcpTrustKey;
-            saveSettingValue("mcpAllowedTools", JSON.stringify(mcpAllowedTools));
-            saveSettingValue("mcpAllowedToolsTrustKey", mcpAllowedToolsTrustKey);
+        if (allowed && mcpApprovedToolsTrustKey !== mcpTrustKey) {
+            mcpApprovedToolContracts = [];
+            mcpApprovedToolsTrustKey = mcpTrustKey;
+            saveSettingValue("mcpApprovedToolContracts", JSON.stringify(mcpApprovedToolContracts));
+            saveSettingValue("mcpApprovedToolsTrustKey", mcpApprovedToolsTrustKey);
         }
         saveSettingValue("mcpToolRequestsAllowed", allowed);
         saveSettingValue("mcpToolRequestsTrustKey", mcpToolRequestsTrustKey);
@@ -293,34 +305,33 @@ Item {
         if (mcpServiceInstance.isConnected || mcpServiceInstance.connecting)
             mcpServiceInstance.disconnectFromServer();
         setMcpToolRequestsAllowed(false);
-        clearMcpToolAllowlist();
+        setMcpInsecureHttpAllowed(false);
+        clearMcpToolApprovals();
         mcpUrl = next;
         saveSettingValue("mcpUrl", next);
     }
 
-    function setMcpCommand(command) {
-        var next = String(command || "").trim() || "mcp-remote";
-        if (next !== "mcp-remote")
-            next = "mcp-remote";
-        if (next === mcpCommand) return;
-        if (mcpServiceInstance.isConnected || mcpServiceInstance.connecting)
+    function setMcpInsecureHttpAllowed(enabled) {
+        var allowed = enabled === true && Mcp.requiresInsecureHttpConsent(mcpUrl);
+        mcpAllowInsecureHttp = allowed;
+        mcpInsecureHttpTrustKey = allowed ? mcpTrustKey : "";
+        saveSettingValue("mcpAllowInsecureHttp", allowed);
+        saveSettingValue("mcpInsecureHttpTrustKey", mcpInsecureHttpTrustKey);
+        if (!allowed && (mcpServiceInstance.isConnected || mcpServiceInstance.connecting)
+                && Mcp.requiresInsecureHttpConsent(mcpUrl))
             mcpServiceInstance.disconnectFromServer();
-        setMcpToolRequestsAllowed(false);
-        clearMcpToolAllowlist();
-        mcpCommand = next;
-        saveSettingValue("mcpCommand", next);
     }
 
-    function isMcpToolAllowed(toolName) {
-        return mcpServiceInstance.isToolAllowed(toolName, activeMcpAllowedTools);
+    function isMcpToolApproved(toolName) {
+        return mcpServiceInstance.isToolApproved(toolName, activeMcpToolApprovals);
     }
 
-    function setMcpToolAllowed(toolName, allowed) {
-        var base = mcpAllowedToolsTrustKey === mcpTrustKey ? mcpAllowedTools : [];
-        mcpAllowedTools = mcpServiceInstance.setToolAllowed(base, toolName, allowed === true);
-        mcpAllowedToolsTrustKey = mcpTrustKey;
-        saveSettingValue("mcpAllowedTools", JSON.stringify(mcpAllowedTools));
-        saveSettingValue("mcpAllowedToolsTrustKey", mcpAllowedToolsTrustKey);
+    function setMcpToolApproved(toolName, approved) {
+        var base = mcpApprovedToolsTrustKey === mcpTrustKey ? mcpApprovedToolContracts : [];
+        mcpApprovedToolContracts = mcpServiceInstance.setToolApproved(base, toolName, approved === true);
+        mcpApprovedToolsTrustKey = mcpTrustKey;
+        saveSettingValue("mcpApprovedToolContracts", JSON.stringify(mcpApprovedToolContracts));
+        saveSettingValue("mcpApprovedToolsTrustKey", mcpApprovedToolsTrustKey);
     }
 
     function approveMcpToolCall() {
@@ -331,21 +342,21 @@ Item {
         return streamingService.rejectPendingToolCall("Tool call rejected by user.");
     }
 
-    function clearMcpToolAllowlist() {
-        mcpAllowedTools = [];
-        mcpAllowedToolsTrustKey = "";
-        saveSettingValue("mcpAllowedTools", JSON.stringify(mcpAllowedTools));
-        saveSettingValue("mcpAllowedToolsTrustKey", mcpAllowedToolsTrustKey);
+    function clearMcpToolApprovals() {
+        mcpApprovedToolContracts = [];
+        mcpApprovedToolsTrustKey = "";
+        saveSettingValue("mcpApprovedToolContracts", JSON.stringify(mcpApprovedToolContracts));
+        saveSettingValue("mcpApprovedToolsTrustKey", mcpApprovedToolsTrustKey);
     }
 
-    function _pruneMcpAllowedTools() {
-        if (mcpAllowedToolsTrustKey !== mcpTrustKey)
+    function _pruneMcpToolApprovals() {
+        if (mcpApprovedToolsTrustKey !== mcpTrustKey)
             return;
-        var pruned = Mcp.pruneApprovedTools(mcpAllowedTools, mcpServiceInstance.tools);
-        if (JSON.stringify(pruned) === JSON.stringify(mcpAllowedTools))
+        var pruned = Mcp.pruneApprovedTools(mcpApprovedToolContracts, mcpServiceInstance.tools);
+        if (JSON.stringify(pruned) === JSON.stringify(mcpApprovedToolContracts))
             return;
-        mcpAllowedTools = pruned;
-        saveSettingValue("mcpAllowedTools", JSON.stringify(mcpAllowedTools));
+        mcpApprovedToolContracts = pruned;
+        saveSettingValue("mcpApprovedToolContracts", JSON.stringify(mcpApprovedToolContracts));
     }
 
     Timer {
@@ -682,7 +693,7 @@ Item {
             thinkingEnabled: thinkingEnabled
         };
         if (provider === "ollama" && root.mcpToolRequestsAllowed && mcpServiceInstance.isConnected) {
-            var tools = mcpServiceInstance.getOllamaTools(activeMcpAllowedTools);
+            var tools = mcpServiceInstance.getOllamaTools(activeMcpToolApprovals);
             if (tools.length > 0)
                 payload.tools = tools;
         }
@@ -693,7 +704,7 @@ Item {
         var payload = _buildPayload(lastUserText);
         payload.messages = messages;
         if (provider === "ollama" && mcpToolRequestsAllowed && mcpServiceInstance.isConnected) {
-            var tools = mcpServiceInstance.getOllamaTools(activeMcpAllowedTools);
+            var tools = mcpServiceInstance.getOllamaTools(activeMcpToolApprovals);
             if (tools.length > 0)
                 payload.tools = tools;
         }
