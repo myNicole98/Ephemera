@@ -47,6 +47,7 @@ Item {
     property bool panelOnLeft: false
     // --- MCP ---
     property bool mcpEnabled: false
+    property bool mcpAutoExecuteTools: false
     property string mcpUrl: ""
     property string mcpCommand: "mcp-remote"
     property alias mcpService: mcpServiceInstance
@@ -106,6 +107,10 @@ Item {
         streamingService.resetErrorState();
         if (_keyringAvailable)
             keyringService.refreshKeyringKey();
+        if (isOllama && mcpEnabled && mcpUrl && mcpCommand)
+            mcpServiceInstance.connectToServer();
+        else
+            mcpServiceInstance.disconnectFromServer();
     }
 
     // ─── Child services ─────────────────────────────────────────────
@@ -119,7 +124,7 @@ Item {
         id: mcpServiceInstance
         mcpUrl: root.mcpUrl
         mcpCommand: root.mcpCommand
-        enabled: root.mcpEnabled
+        enabled: root.isOllama && root.mcpEnabled
         onToolCallCompleted: (callId, result) => streamingService._onToolCallCompleted(callId, result)
         onToolCallFailed: (callId, error) => streamingService._onToolCallFailed(callId, error)
     }
@@ -135,7 +140,8 @@ Item {
         onStreamFinalized: (streamId, stats) => root._applyFinalize(streamId, stats)
         onStreamError: (streamId, message) => root._applyError(streamId, message)
         onStreamCancelled: (streamId, stats) => root._applyCancelled(streamId, stats)
-        mcpService: root.mcpEnabled ? mcpServiceInstance : null
+        mcpService: root.isOllama && root.mcpEnabled && root.mcpAutoExecuteTools ? mcpServiceInstance : null
+        toolCallsAllowed: root.isOllama && root.mcpEnabled && root.mcpAutoExecuteTools
         onStreamToolRoundReady: (streamId, messages) => root._launchCurlWithMessages(messages)
     }
 
@@ -207,10 +213,13 @@ Item {
         thinkingEnabled = PluginService.loadPluginData(pluginId, "thinkingEnabled", false) === true;
         panelOnLeft = PluginService.loadPluginData(pluginId, "panelOnLeft", false) === true;
         mcpEnabled = PluginService.loadPluginData(pluginId, "mcpEnabled", false) === true;
+        mcpAutoExecuteTools = PluginService.loadPluginData(pluginId, "mcpAutoExecuteTools", false) === true;
         mcpUrl = String(PluginService.loadPluginData(pluginId, "mcpUrl", "")).trim();
         mcpCommand = String(PluginService.loadPluginData(pluginId, "mcpCommand", "mcp-remote")).trim() || "mcp-remote";
-        if (mcpEnabled && mcpUrl && mcpCommand)
+        if (isOllama && mcpEnabled && mcpUrl && mcpCommand)
             mcpServiceInstance.connectToServer();
+        else
+            mcpServiceInstance.disconnectFromServer();
         unlimitedTokens = PluginService.loadPluginData(pluginId, "unlimitedTokens", false) === true;
         persistChat = PluginService.loadPluginData(pluginId, "persistChat", false) === true;
         ollamaManager.ollamaIdleMinutes = Number(PluginService.loadPluginData(pluginId, "ollamaIdleMinutes", 5)) || 5;
@@ -578,7 +587,7 @@ Item {
             ollamaThinkingMode: ollamaThinkingMode,
             thinkingEnabled: thinkingEnabled
         };
-        if (provider === "ollama" && root.mcpEnabled && mcpServiceInstance.isConnected)
+        if (provider === "ollama" && root.mcpEnabled && root.mcpAutoExecuteTools && mcpServiceInstance.isConnected)
             payload.tools = mcpServiceInstance.getOllamaTools();
         return payload;
     }
@@ -586,7 +595,7 @@ Item {
     function _launchCurlWithMessages(messages) {
         var payload = _buildPayload(lastUserText);
         payload.messages = messages;
-        if (provider === "ollama" && mcpEnabled && mcpServiceInstance.isConnected)
+        if (provider === "ollama" && mcpEnabled && mcpAutoExecuteTools && mcpServiceInstance.isConnected)
             payload.tools = mcpServiceInstance.getOllamaTools();
         var result = _buildCurlCommand(payload);
         if (!result) {

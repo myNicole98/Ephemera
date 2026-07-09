@@ -33,6 +33,7 @@ Item {
     property var _allToolCalls: []
     property var _toolResults: []
     property var mcpService: null
+    property bool toolCallsAllowed: false
     property var _conversationMessages: []
     property int _pendingCallId: -1
     property var _pendingToolCallMeta: null
@@ -309,6 +310,10 @@ Item {
         var toolArgs = toolCall.function ? toolCall.function.arguments : toolCall.arguments;
         if (typeof toolArgs === "string") {
             try { toolArgs = JSON.parse(toolArgs); } catch(e) { toolArgs = {}; }
+        }
+        if (!toolCallsAllowed) {
+            _markError(activeStreamId, "MCP tool call blocked. Enable automatic tool calls in MCP settings to let the model run tools.");
+            return;
         }
         if (!mcpService || !mcpService.isConnected) {
             _recordToolResult(_toolCallId(toolCall, toolName), "Error: MCP service not connected");

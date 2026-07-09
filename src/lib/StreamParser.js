@@ -93,6 +93,7 @@ function parseDelta(jsonText, provider) {
         } else if (provider === "ollama") {
             if (data.message && typeof data.message.content === "string") {
                 result.content = data.message.content;
+                result.thinking = data.message.thinking || "";
                 if (Array.isArray(data.message.tool_calls) && data.message.tool_calls.length > 0)
                     result.toolCalls = data.message.tool_calls;
                 if (data.done)

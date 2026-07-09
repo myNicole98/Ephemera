@@ -86,6 +86,50 @@ SettingsCard {
         AccordionSection {
             show: aiService.mcpEnabled
 
+            Row {
+                width: parent.width
+                spacing: Theme.spacingM
+
+                DankIcon {
+                    name: "verified_user"
+                    size: Theme.iconSize
+                    color: Theme.primary
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Column {
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Theme.spacingXS
+                    width: parent.width - parent.spacing * 2 - Theme.iconSize - autoExecuteToggle.width
+
+                    StyledText {
+                        text: "Allow Model Tool Calls"
+                        font.pixelSize: Theme.fontSizeMedium
+                        font.weight: Font.Medium
+                        color: Theme.surfaceText
+                    }
+
+                    StyledText {
+                        text: "Model-selected tools run automatically for trusted MCP servers."
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceVariantText
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+                }
+
+                Switch {
+                    id: autoExecuteToggle
+                    checked: aiService.mcpAutoExecuteTools
+                    enabled: aiService.isOllama
+                    anchors.verticalCenter: parent.verticalCenter
+                    onToggled: {
+                        aiService.mcpAutoExecuteTools = checked;
+                        aiService.saveSettingValue("mcpAutoExecuteTools", checked);
+                    }
+                }
+            }
+
             StyledText {
                 text: "MCP Server URL"
                 font.pixelSize: Theme.fontSizeSmall

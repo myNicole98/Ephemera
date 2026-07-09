@@ -416,6 +416,14 @@ section("StreamParser.parseDelta — Ollama native /api/chat");
     assertEqual(r.done, false, "not done on normal chunk");
     assertEqual(r.toolCalls, false, "no tool calls on normal chunk");
 
+    json = JSON.stringify({
+        model: "gemma4",
+        message: { role: "assistant", content: "", thinking: "native thought" },
+        done: false
+    });
+    r = StreamParser.parseDelta(json, "ollama");
+    assertEqual(r.thinking, "native thought", "extracts Ollama native thinking");
+
     // Tool call chunk (MCP tool)
     json = JSON.stringify({
         model: "gemma4",
@@ -771,8 +779,20 @@ section("Providers.buildCurlCommand");
     r = Providers.buildCurlCommand("ollama", payload, "");
     body = parseCurlConfigBody(r.body);
     assert(r.body.indexOf('url = "http://localhost:11434/api/chat"') >= 0, "Ollama tools use native chat endpoint");
+    assertEqual(body.max_tokens, undefined, "Ollama native chat does not use OpenAI max_tokens");
+    assertEqual(body.temperature, undefined, "Ollama native chat does not use top-level temperature");
+    assertEqual(body.options.num_predict, 4096, "Ollama native chat maps max_tokens to num_predict");
+    assertEqual(body.options.temperature, 0.7, "Ollama native chat maps temperature into options");
     assertEqual(body.tools.length, 1, "Ollama tool schema included");
     assertEqual(body.tools[0].function.name, "web_search", "Ollama tool name included");
+    payload.ollamaThinkingMode = "none";
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assertEqual(body.think, false, "Ollama native chat maps thinking off to think false");
+    payload.ollamaThinkingMode = "high";
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assertEqual(body.think, "high", "Ollama native chat maps thinking effort to think");
     delete payload.tools;
 
     payload.ollamaThinkingMode = "none";

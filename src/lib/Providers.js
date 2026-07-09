@@ -164,12 +164,22 @@ function ollamaRequest(payload) {
         messages: payload.messages,
         stream: true
     };
-    if (payload.max_tokens > 0) body.max_tokens = payload.max_tokens;
-    if (temp !== undefined) body.temperature = temp;
     if (useNativeTools) {
+        var options = {};
+        if (payload.max_tokens > 0) options.num_predict = payload.max_tokens;
+        if (temp !== undefined) options.temperature = temp;
+        if (Object.keys(options).length > 0)
+            body.options = options;
+        if (thinkingMode === "none")
+            body.think = false;
+        else if (thinkingMode !== "default")
+            body.think = thinkingMode;
         body.tools = payload.tools;
-    } else if (thinkingMode !== "default") {
-        body.reasoning_effort = thinkingMode;
+    } else {
+        if (payload.max_tokens > 0) body.max_tokens = payload.max_tokens;
+        if (temp !== undefined) body.temperature = temp;
+        if (thinkingMode !== "default")
+            body.reasoning_effort = thinkingMode;
     }
     // No auth header for Ollama
     return { url: url, headers: [], body: JSON.stringify(body) };
