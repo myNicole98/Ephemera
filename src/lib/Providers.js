@@ -72,7 +72,7 @@ function openaiChatCompletionsUrl(baseUrl) {
     var b = normalizeBaseUrl(baseUrl || "https://api.openai.com");
     if (/\/v\d+$/.test(b))
         return b + "/chat/completions";
-    return b + "/api/chat";
+    return b + "/v1/chat/completions";
 }
 
 /**
@@ -154,11 +154,11 @@ function buildRequest(provider, payload, apiKey) {
 }
 
 function ollamaRequest(payload) {
-    // Use OpenAI-compatible endpoint for SSE streaming
-    var base = normalizeBaseUrl(payload.baseUrl || "http://localhost:8000");
-    //var url = base + "/v1/chat/completions";
-    var url = base + "/api/chat";
+    var base = normalizeBaseUrl(payload.baseUrl || "http://localhost:11434");
+    var useNativeTools = payload.tools && payload.tools.length > 0;
+    var url = base + (useNativeTools ? "/api/chat" : "/v1/chat/completions");
     var temp = clampTemperature("ollama", payload.model, payload.temperature);
+    var thinkingMode = normalizeOllamaThinkingMode(payload.ollamaThinkingMode);
     var body = {
         model: payload.model,
         messages: payload.messages,
@@ -166,9 +166,26 @@ function ollamaRequest(payload) {
     };
     if (payload.max_tokens > 0) body.max_tokens = payload.max_tokens;
     if (temp !== undefined) body.temperature = temp;
-    if (payload.tools && payload.tools.length > 0) body.tools = payload.tools;
+    if (useNativeTools) {
+        body.tools = payload.tools;
+    } else if (thinkingMode !== "default") {
+        body.reasoning_effort = thinkingMode;
+    }
     // No auth header for Ollama
     return { url: url, headers: [], body: JSON.stringify(body) };
+}
+
+function normalizeOllamaThinkingMode(mode) {
+    var m = String(mode || "default").trim().toLowerCase();
+    switch (m) {
+    case "none":
+    case "low":
+    case "medium":
+    case "high":
+        return m;
+    default:
+        return "default";
+    }
 }
 
 function openaiRequest(payload, apiKey) {

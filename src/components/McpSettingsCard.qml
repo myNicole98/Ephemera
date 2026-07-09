@@ -58,7 +58,7 @@ SettingsCard {
                 }
 
                 StyledText {
-                    text: "Connect to an MCP server and inject tools into chat requests"
+                    text: "Connect an MCP bridge for Ollama tool calling"
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.surfaceVariantText
                     wrapMode: Text.WordWrap
@@ -69,11 +69,12 @@ SettingsCard {
             Switch {
                 id: mcpEnabledToggle
                 checked: aiService.mcpEnabled
+                enabled: aiService.isOllama
                 anchors.verticalCenter: parent.verticalCenter
                 onToggled: {
                     aiService.mcpEnabled = checked;
                     aiService.saveSettingValue("mcpEnabled", checked);
-                    if (checked)
+                    if (checked && aiService.isOllama)
                         aiService.mcpService.connectToServer();
                     else
                         aiService.mcpService.disconnectFromServer();
@@ -81,7 +82,7 @@ SettingsCard {
             }
         }
 
-        // URL + token fields (shown when enabled)
+        // URL + bridge command fields
         AccordionSection {
             show: aiService.mcpEnabled
 
@@ -105,22 +106,21 @@ SettingsCard {
             }
 
             StyledText {
-                text: "Auth Token"
+                text: "Bridge Command"
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
             }
 
             DankTextField {
-                id: mcpTokenField
+                id: mcpCommandField
                 width: parent.width
-                text: aiService.mcpToken
-                placeholderText: "Bearer token"
-                echoMode: TextInput.Password
+                text: aiService.mcpCommand
+                placeholderText: "mcp-remote"
                 onEditingFinished: {
-                    var token = text.trim();
-                    aiService.mcpToken = token;
-                    aiService.saveSettingValue("mcpToken", token);
-                    aiService.mcpService.mcpToken = token;
+                    var command = text.trim();
+                    aiService.mcpCommand = command;
+                    aiService.saveSettingValue("mcpCommand", command);
+                    aiService.mcpService.mcpCommand = command;
                 }
             }
 
@@ -137,7 +137,7 @@ SettingsCard {
                     }
                     iconName: aiService.mcpService.isConnected ? "refresh" : "link"
                     width: (parent.width - parent.spacing) / 2
-                    enabled: !aiService.mcpService.connecting && aiService.mcpUrl.length > 0 && aiService.mcpToken.length > 0
+                    enabled: aiService.isOllama && !aiService.mcpService.connecting && aiService.mcpUrl.length > 0 && aiService.mcpCommand.length > 0
                     onClicked: aiService.mcpService.reconnectToServer()
                 }
 

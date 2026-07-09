@@ -36,6 +36,11 @@ Item {
     property var _conversationMessages: []
     property int _pendingCallId: -1
     property var _pendingToolCallMeta: null
+    property bool _awaitingToolExecution: false
+    property int _toolRoundCount: 0
+    readonly property int _maxToolRounds: 4
+    readonly property int _maxToolResultChars: 20000
+    readonly property int _toolCallTimeoutMs: 30000
     property int lastHttpStatus: 0
     property bool lastRequestFailed: false
 
@@ -97,6 +102,12 @@ Item {
         }
         _insideThinkTag = false;
         isStreaming = false;
+        _awaitingToolExecution = false;
+        _pendingToolCalls = [];
+        _toolResults = [];
+        _pendingCallId = -1;
+        _pendingToolCallMeta = null;
+        toolCallTimer.stop();
 
         streamCancelled(streamId, _buildStreamStats());
         chatFetcher.running = false;
@@ -117,6 +128,12 @@ Item {
         _seenToolCalls = false;
         _pendingToolCalls = [];
         _allToolCalls = [];
+        _toolResults = [];
+        _awaitingToolExecution = false;
+        _toolRoundCount = 0;
+        _pendingCallId = -1;
+        _pendingToolCallMeta = null;
+        toolCallTimer.stop();
         streamBuffer = "";
         pendingStdinBody = "";
     }
@@ -136,6 +153,11 @@ Item {
         _pendingToolCalls = [];
         _allToolCalls = [];
         _toolResults = [];
+        _awaitingToolExecution = false;
+        _toolRoundCount = 0;
+        _pendingCallId = -1;
+        _pendingToolCallMeta = null;
+        toolCallTimer.stop();
         _conversationMessages = messages || [];
     }
 
@@ -153,67 +175,85 @@ Item {
 
     // --- Internal: stream processing ---
     function handleStreamChunk(chunk) {
-    var result = StreamParser.splitLines(chunk, streamBuffer);
-    streamBuffer = result.buffer;
+        var result = StreamParser.splitLines(chunk, streamBuffer);
+        streamBuffer = result.buffer;
 
-    for (var i = 0; i < result.lines.length; i++) {
-        var line = result.lines[i];
+        for (var i = 0; i < result.lines.length; i++) {
+            var line = result.lines[i];
 
-        if (line === "data: [DONE]" || line === "data:[DONE]")
-            continue;
-
-        var jsonPart;
-        if (line.startsWith("data:")) {
-            jsonPart = line.substring(5).trim();
-        } else if (line.startsWith("{")) {
-            // Bare NDJSON (Ollama native /api/chat, etc.)
-            jsonPart = line;
-        } else {
-            continue;
-        }
-
-        var delta = StreamParser.parseDelta(jsonPart, provider);
-
-        if (delta.outputTokens > 0)
-            _apiOutputTokens = delta.outputTokens;
-
-        if (delta.toolCalls && delta.toolCalls.length > 0) {
-            _seenToolCalls = true;
-            for (var tci = 0; tci < delta.toolCalls.length; tci++) {
-                _pendingToolCalls.push(delta.toolCalls[tci]);
-                _allToolCalls.push(delta.toolCalls[tci]);
+            if (line === "data: [DONE]" || line === "data:[DONE]") {
+                if (_pendingToolCalls.length > 0)
+                    _awaitingToolExecution = true;
+                else
+                    _finalizeStream(activeStreamId);
+                continue;
             }
-        }
-        if (delta.thinking) {
-            streamTokenCount++;
-            _applyThinkingDelta(activeStreamId, delta.thinking);
-        }
-        if (delta.content) {
-            streamTokenCount++;
-            if (!Providers.getProviderInfo(provider).hasNativeThinking) {
-                var tagResult = StreamParser.routeThinkTags(delta.content, _tagBuffer, _insideThinkTag);
-                _tagBuffer = tagResult.tagBuffer;
-                _insideThinkTag = tagResult.insideThinkTag;
-                for (var ti = 0; ti < tagResult.thinkingParts.length; ti++)
-                    _applyThinkingDelta(activeStreamId, tagResult.thinkingParts[ti]);
-                for (var ci = 0; ci < tagResult.contentParts.length; ci++)
-                    _applyContentDelta(activeStreamId, tagResult.contentParts[ci]);
+
+            var jsonPart;
+            if (line.startsWith("data:")) {
+                jsonPart = line.substring(5).trim();
+            } else if (line.startsWith("{")) {
+                jsonPart = line;
             } else {
-                _applyContentDelta(activeStreamId, delta.content);
+                continue;
             }
-        }
-        if (delta.done) {
-            if (_pendingToolCalls.length > 0) {
-                _executeNextToolCall();
-            } else {
-                _finalizeStream(activeStreamId);
+
+            var delta = StreamParser.parseDelta(jsonPart, provider);
+
+            if (delta.outputTokens > 0)
+                _apiOutputTokens = delta.outputTokens;
+
+            if (delta.toolCalls && delta.toolCalls.length > 0) {
+                _seenToolCalls = true;
+                for (var tci = 0; tci < delta.toolCalls.length; tci++) {
+                    _pendingToolCalls.push(delta.toolCalls[tci]);
+                    _allToolCalls.push(delta.toolCalls[tci]);
+                }
+            }
+            if (delta.thinking) {
+                streamTokenCount++;
+                _applyThinkingDelta(activeStreamId, delta.thinking);
+            }
+            if (delta.content) {
+                streamTokenCount++;
+                if (!Providers.getProviderInfo(provider).hasNativeThinking) {
+                    var tagResult = StreamParser.routeThinkTags(delta.content, _tagBuffer, _insideThinkTag);
+                    _tagBuffer = tagResult.tagBuffer;
+                    _insideThinkTag = tagResult.insideThinkTag;
+                    for (var ti = 0; ti < tagResult.thinkingParts.length; ti++)
+                        _applyThinkingDelta(activeStreamId, tagResult.thinkingParts[ti]);
+                    for (var ci = 0; ci < tagResult.contentParts.length; ci++)
+                        _applyContentDelta(activeStreamId, tagResult.contentParts[ci]);
+                } else {
+                    _applyContentDelta(activeStreamId, delta.content);
+                }
+            }
+            if (delta.done) {
+                if (_pendingToolCalls.length > 0)
+                    _awaitingToolExecution = true;
+                else
+                    _finalizeStream(activeStreamId);
             }
         }
     }
-}
 
+    function _truncateToolResult(text) {
+        if (!text || text.length <= _maxToolResultChars)
+            return text || "";
+        return text.substring(0, _maxToolResultChars) + "\n\n[Tool result truncated]";
+    }
 
+    function _toolCallId(toolCall, fallbackName) {
+        return toolCall.id || fallbackName || ("call_" + _pendingCallId);
+    }
 
+    function _recordToolResult(toolCallId, content) {
+        _toolResults.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            content: _truncateToolResult(content)
+        });
+    }
 
     function handleStreamFinished(text) {
         var parsed = StreamParser.extractHttpStatus(text);
@@ -237,6 +277,12 @@ Item {
             if (hint) msg += "\n" + hint;
             if (preview) msg += "\n\n" + preview;
             _markError(activeStreamId, msg);
+            return;
+        }
+
+        if (_awaitingToolExecution && _pendingToolCalls.length > 0) {
+            _awaitingToolExecution = false;
+            _executeNextToolCall();
             return;
         }
 
@@ -265,41 +311,52 @@ Item {
             try { toolArgs = JSON.parse(toolArgs); } catch(e) { toolArgs = {}; }
         }
         if (!mcpService || !mcpService.isConnected) {
-            _toolResults.push({ tool_call_id: toolCall.id || toolName, role: "tool", content: "Error: MCP service not connected" });
+            _recordToolResult(_toolCallId(toolCall, toolName), "Error: MCP service not connected");
             _executeNextToolCall();
             return;
         }
-        _applyThinkingDelta(activeStreamId, "
-🔧 Calling: " + toolName + "
-");
+        _applyThinkingDelta(activeStreamId, "\nCalling tool: " + toolName + "\n");
+        var toolCallId = _toolCallId(toolCall, toolName);
         var callId = mcpService.callTool(toolName, toolArgs);
+        if (callId < 0) {
+            _recordToolResult(toolCallId, "Error: MCP service not connected");
+            _executeNextToolCall();
+            return;
+        }
         _pendingCallId = callId;
-        _pendingToolCallMeta = { id: toolCall.id || ("call_" + callId), name: toolName };
+        _pendingToolCallMeta = { id: toolCallId, name: toolName };
+        toolCallTimer.restart();
     }
 
     function _onToolCallCompleted(callId, result) {
         if (callId !== _pendingCallId) return;
+        toolCallTimer.stop();
         _pendingCallId = -1;
         var resultText = (typeof result === "string") ? result : JSON.stringify(result);
-        _applyThinkingDelta(activeStreamId, "✅ Result: " + resultText.substring(0, 200) + (resultText.length > 200 ? "…" : "") + "
-");
-        _toolResults.push({ role: "tool", tool_call_id: _pendingToolCallMeta.id, content: resultText });
+        var preview = resultText.substring(0, 200) + (resultText.length > 200 ? "..." : "");
+        _applyThinkingDelta(activeStreamId, "Tool result: " + preview + "\n");
+        _recordToolResult(_pendingToolCallMeta.id, resultText);
         _pendingToolCallMeta = null;
         _executeNextToolCall();
     }
 
     function _onToolCallFailed(callId, error) {
         if (callId !== _pendingCallId) return;
+        toolCallTimer.stop();
         _pendingCallId = -1;
-        _applyThinkingDelta(activeStreamId, "❌ Error: " + error + "
-");
-        _toolResults.push({ role: "tool", tool_call_id: _pendingToolCallMeta ? _pendingToolCallMeta.id : String(callId), content: "Error: " + error });
+        _applyThinkingDelta(activeStreamId, "Tool error: " + error + "\n");
+        _recordToolResult(_pendingToolCallMeta ? _pendingToolCallMeta.id : String(callId), "Error: " + error);
         _pendingToolCallMeta = null;
         _executeNextToolCall();
     }
 
     function _resumeWithToolResults() {
         if (_toolResults.length === 0) { _finalizeStream(activeStreamId); return; }
+        if (_toolRoundCount >= _maxToolRounds) {
+            _markError(activeStreamId, "MCP tool call limit reached.");
+            return;
+        }
+        _toolRoundCount++;
         var updatedMessages = _conversationMessages.slice();
         updatedMessages.push({
             role: "assistant",
@@ -314,6 +371,16 @@ Item {
         _pendingToolCalls = [];
         _allToolCalls = [];
         streamToolRoundReady(activeStreamId, updatedMessages);
+    }
+
+    Timer {
+        id: toolCallTimer
+        interval: root._toolCallTimeoutMs
+        repeat: false
+        onTriggered: {
+            if (root._pendingCallId >= 0)
+                root._onToolCallFailed(root._pendingCallId, "MCP tool call timed out.");
+        }
     }
 
     function _applyContentDelta(streamId, deltaText) {

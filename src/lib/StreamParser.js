@@ -38,23 +38,23 @@ function splitLines(chunk, buffer) {
  * Handles four provider formats:
  * - Anthropic: content_block_delta with thinking_delta or text_delta types.
  * - Gemini: candidates[].content.parts[].text (supports array or single object).
- * - Ollama: message.content (native /api/chat NDJSON format).
+ * - Ollama: native message.content/tool_calls and OpenAI-compatible choices[].delta.
  * - OpenAI/Custom: choices[0].delta.content and .reasoning_content/.reasoning.
  *
  * Also extracts token usage from provider-specific fields when available:
  * - Anthropic: usage.output_tokens from message_delta events.
  * - Gemini: usageMetadata.candidatesTokenCount from any chunk.
- * - Ollama: eval_count from the final chunk (done: true).
+ * - Ollama: eval_count from native final chunks or usage.completion_tokens from OpenAI-compatible final chunks.
  * - OpenAI: usage.completion_tokens from the final chunk.
  *
  * @param {string} jsonText - Raw JSON string (after stripping "data:" prefix if present).
  * @param {string} provider - Provider identifier ("anthropic"|"gemini"|"ollama"|"openai"|"custom").
- * @returns {{ content: string, thinking: string, done: boolean, outputTokens: number, toolCalls: boolean }}
+ * @returns {{ content: string, thinking: string, done: boolean, outputTokens: number, toolCalls: Array|false }}
  *   content: assistant text delta (empty string if none).
  *   thinking: reasoning/thinking delta (empty string if none).
  *   done: true if the provider signaled stream completion.
  *   outputTokens: completion token count from API (0 if not present in this event).
- *   toolCalls: true if this chunk contains tool call requests (Ollama MCP).
+ *   toolCalls: provider tool call requests, or false if this chunk has none.
  */
 function parseDelta(jsonText, provider) {
     var result = { content: "", thinking: "", done: false, outputTokens: 0, toolCalls: false };
@@ -91,14 +91,28 @@ function parseDelta(jsonText, provider) {
                     result.outputTokens = meta.candidatesTokenCount;
             }
         } else if (provider === "ollama") {
-            if (data.message && typeof data.message.content === "string")
+            if (data.message && typeof data.message.content === "string") {
                 result.content = data.message.content;
-            if (data.message && Array.isArray(data.message.tool_calls) && data.message.tool_calls.length > 0)
-                result.toolCalls = data.message.tool_calls;
-            if (data.done)
-                result.done = true;
-            if (data.eval_count > 0)
-                result.outputTokens = data.eval_count;
+                if (Array.isArray(data.message.tool_calls) && data.message.tool_calls.length > 0)
+                    result.toolCalls = data.message.tool_calls;
+                if (data.done)
+                    result.done = true;
+                if (data.eval_count > 0)
+                    result.outputTokens = data.eval_count;
+            } else {
+                var ochoices = data.choices;
+                if (ochoices && ochoices[0] && ochoices[0].delta) {
+                    var od = ochoices[0].delta;
+                    result.thinking = od.reasoning_content || od.reasoning || "";
+                    result.content = od.content || "";
+                    if (Array.isArray(od.tool_calls) && od.tool_calls.length > 0)
+                        result.toolCalls = od.tool_calls;
+                }
+                if (ochoices && ochoices[0] && ochoices[0].finish_reason)
+                    result.done = true;
+                if (data.usage && data.usage.completion_tokens > 0)
+                    result.outputTokens = data.usage.completion_tokens;
+            }
         } else {
             // OpenAI / OpenAI-compatible
             var choices = data.choices;
@@ -120,19 +134,19 @@ function parseDelta(jsonText, provider) {
 }
 
 /**
- * Route streaming text through <think //</think//> tag detection.
+ * Route streaming text through <think>/</think> tag detection.
  *
  * Processes a delta chunk against the current tag-parsing state to separate
- * thinking content (inside <think//> tags) from regular content. Handles partial
+ * thinking content (inside <think> tags) from regular content. Handles partial
  * tags that span chunk boundaries by buffering candidate bytes.
  *
- * State machine: starts outside think tags. When <think//> is found, subsequent
- * text routes to thinkingParts until //</think//> closes it. A leading newline
+ * State machine: starts outside think tags. When <think> is found, subsequent
+ * text routes to thinkingParts until </think> closes it. A leading newline
  * after a tag is consumed (stripped) to avoid blank lines in output.
  *
  * @param {string} delta - New text chunk from the SSE stream.
  * @param {string} tagBuffer - Buffered partial tag from previous call.
- * @param {boolean} insideThinkTag - Whether the parser is currently inside a <think//> block.
+ * @param {boolean} insideThinkTag - Whether the parser is currently inside a <think> block.
  * @returns {{ contentParts: string[], thinkingParts: string[], tagBuffer: string, insideThinkTag: boolean }}
  *   contentParts/thinkingParts: text fragments to append to content/thinking buffers.
  *   tagBuffer: partial tag carried forward (empty if no partial match).
@@ -194,7 +208,7 @@ function routeThinkTags(delta, tagBuffer, insideThinkTag) {
  *
  * Used as a fallback when no streaming deltas were received but the HTTP
  * response was successful. Handles Anthropic (content[].text), Gemini
- * (candidates[].content.parts[].text), Ollama (message.content), and
+ * (candidates[].content.parts[].text), Ollama native/OpenAI-compatible, and
  * OpenAI/Custom (choices[].message.content).
  *
  * @param {string} bodyText - Raw response body (JSON string).
@@ -232,11 +246,9 @@ function extractNonStreamingText(bodyText, provider) {
             }
             return gout;
         }
-        // Ollama native /api/chat format
         if (provider === "ollama") {
             if (data.message && typeof data.message.content === "string")
                 return data.message.content;
-            return "";
         }
         // OpenAI / OpenAI-compatible
         var choices = data.choices;
@@ -270,4 +282,3 @@ function extractHttpStatus(text) {
     if (markerIdx >= 0) body = body.substring(0, markerIdx);
     return { status: status, body: body.trim() };
 }
-

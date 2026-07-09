@@ -34,6 +34,7 @@ Item {
     // --- Provider settings ---
     property string provider: "ollama"
     property string ollamaUrl: "http://localhost:11434"
+    property string ollamaThinkingMode: "default"
     property string baseUrl: "http://localhost:11434"
     property string model: ""
     property real temperature: 0.7
@@ -47,7 +48,7 @@ Item {
     // --- MCP ---
     property bool mcpEnabled: false
     property string mcpUrl: ""
-    property string mcpToken: ""
+    property string mcpCommand: "mcp-remote"
     property alias mcpService: mcpServiceInstance
 
     // --- Ollama (delegated to OllamaManager) ---
@@ -117,7 +118,7 @@ Item {
     MCPService {
         id: mcpServiceInstance
         mcpUrl: root.mcpUrl
-        mcpToken: root.mcpToken
+        mcpCommand: root.mcpCommand
         enabled: root.mcpEnabled
         onToolCallCompleted: (callId, result) => streamingService._onToolCallCompleted(callId, result)
         onToolCallFailed: (callId, error) => streamingService._onToolCallFailed(callId, error)
@@ -196,6 +197,7 @@ Item {
 
         provider = String(PluginService.loadPluginData(pluginId, "provider", "ollama")).trim() || "ollama";
         ollamaUrl = String(PluginService.loadPluginData(pluginId, "ollamaUrl", "http://localhost:11434")).trim();
+        ollamaThinkingMode = Providers.normalizeOllamaThinkingMode(PluginService.loadPluginData(pluginId, "ollamaThinkingMode", "default"));
         model = String(PluginService.loadPluginData(pluginId, "model", "")).trim();
         temperature = PluginService.loadPluginData(pluginId, "temperature", 0.7);
         maxTokens = PluginService.loadPluginData(pluginId, "maxTokens", 4096);
@@ -206,8 +208,8 @@ Item {
         panelOnLeft = PluginService.loadPluginData(pluginId, "panelOnLeft", false) === true;
         mcpEnabled = PluginService.loadPluginData(pluginId, "mcpEnabled", false) === true;
         mcpUrl = String(PluginService.loadPluginData(pluginId, "mcpUrl", "")).trim();
-        mcpToken = String(PluginService.loadPluginData(pluginId, "mcpToken", "")).trim();
-        if (mcpEnabled && mcpUrl && mcpToken)
+        mcpCommand = String(PluginService.loadPluginData(pluginId, "mcpCommand", "mcp-remote")).trim() || "mcp-remote";
+        if (mcpEnabled && mcpUrl && mcpCommand)
             mcpServiceInstance.connectToServer();
         unlimitedTokens = PluginService.loadPluginData(pluginId, "unlimitedTokens", false) === true;
         persistChat = PluginService.loadPluginData(pluginId, "persistChat", false) === true;
@@ -573,9 +575,10 @@ Item {
             messages: msgs,
             stream: true,
             timeout: timeout,
+            ollamaThinkingMode: ollamaThinkingMode,
             thinkingEnabled: thinkingEnabled
         };
-        if (root.mcpEnabled && mcpServiceInstance.isConnected)
+        if (provider === "ollama" && root.mcpEnabled && mcpServiceInstance.isConnected)
             payload.tools = mcpServiceInstance.getOllamaTools();
         return payload;
     }
@@ -583,9 +586,13 @@ Item {
     function _launchCurlWithMessages(messages) {
         var payload = _buildPayload(lastUserText);
         payload.messages = messages;
-        if (mcpEnabled && mcpServiceInstance.isConnected)
+        if (provider === "ollama" && mcpEnabled && mcpServiceInstance.isConnected)
             payload.tools = mcpServiceInstance.getOllamaTools();
         var result = _buildCurlCommand(payload);
+        if (!result) {
+            _applyError(activeStreamId, "Could not resume after MCP tool call.");
+            return;
+        }
         streamingService.launchCurl(result, messages);
     }
 

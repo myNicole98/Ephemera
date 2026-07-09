@@ -257,6 +257,14 @@ section("StreamParser.parseDelta — outputTokens");
     r = StreamParser.parseDelta(json, "openai");
     assertEqual(r.outputTokens, 0, "no outputTokens in normal OpenAI delta");
 
+    // Ollama OpenAI-compatible: usage in final chunk
+    json = JSON.stringify({
+        choices: [{ delta: {}, finish_reason: "stop" }],
+        usage: { completion_tokens: 85 }
+    });
+    r = StreamParser.parseDelta(json, "ollama");
+    assertEqual(r.outputTokens, 85, "extracts Ollama OpenAI-compatible completion_tokens");
+
     // Ollama native: eval_count in final chunk
     json = JSON.stringify({
         model: "gemma4",
@@ -421,7 +429,8 @@ section("StreamParser.parseDelta — Ollama native /api/chat");
     r = StreamParser.parseDelta(json, "ollama");
     assertEqual(r.content, "", "tool call chunk has empty content");
     assertEqual(r.done, false, "not done on tool call chunk");
-    assertEqual(r.toolCalls, true, "detects tool calls");
+    assert(Array.isArray(r.toolCalls), "returns tool calls as an array");
+    assertEqual(r.toolCalls[0].function.name, "web_search", "keeps tool call name");
 
     // Tool call with done: true (intermediate turn end)
     json = JSON.stringify({
@@ -435,7 +444,7 @@ section("StreamParser.parseDelta — Ollama native /api/chat");
         eval_count: 15
     });
     r = StreamParser.parseDelta(json, "ollama");
-    assertEqual(r.toolCalls, true, "detects tool calls even with done:true");
+    assert(Array.isArray(r.toolCalls), "detects tool calls even with done:true");
     assertEqual(r.done, true, "done is true on tool call turn end");
     assertEqual(r.outputTokens, 15, "extracts eval_count on tool call chunk");
 
@@ -558,8 +567,8 @@ section("Providers.openaiChatCompletionsUrl");
 (function() {
     assertEqual(
         Providers.openaiChatCompletionsUrl("https://api.openai.com"),
-        "https://api.openai.com/api/chat",
-        "appends /api/chat to base URL without version"
+        "https://api.openai.com/v1/chat/completions",
+        "appends /v1/chat/completions to base URL"
     );
     assertEqual(
         Providers.openaiChatCompletionsUrl("https://api.openai.com/v1"),
@@ -573,13 +582,13 @@ section("Providers.openaiChatCompletionsUrl");
     );
     assertEqual(
         Providers.openaiChatCompletionsUrl(""),
-        "https://api.openai.com/api/chat",
-        "defaults to /api/chat when empty"
+        "https://api.openai.com/v1/chat/completions",
+        "defaults to OpenAI when empty"
     );
     assertEqual(
         Providers.openaiChatCompletionsUrl(null),
-        "https://api.openai.com/api/chat",
-        "defaults to /api/chat when null"
+        "https://api.openai.com/v1/chat/completions",
+        "defaults to OpenAI when null"
     );
 })();
 
@@ -744,10 +753,53 @@ section("Providers.buildCurlCommand");
     var body = parseCurlConfigBody(r.body);
     assertEqual(body.model, "llama3", "body contains model");
     assertEqual(body.stream, true, "body has stream: true");
+    assertEqual(body.reasoning_effort, undefined, "default Ollama thinking omits reasoning_effort");
+    assert(r.body.indexOf('url = "http://localhost:11434/v1/chat/completions"') >= 0, "Ollama chat defaults to OpenAI-compatible endpoint");
 
     // No secrets in /proc/cmdline — verify cmd has no auth headers or URLs
     var cmdStr = r.cmd.join(" ");
     assert(cmdStr.indexOf("localhost:11434") < 0, "URL not in cmd args (hidden in config)");
+
+    payload.tools = [{
+        type: "function",
+        function: {
+            name: "web_search",
+            description: "Search",
+            parameters: { type: "object", properties: {} }
+        }
+    }];
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assert(r.body.indexOf('url = "http://localhost:11434/api/chat"') >= 0, "Ollama tools use native chat endpoint");
+    assertEqual(body.tools.length, 1, "Ollama tool schema included");
+    assertEqual(body.tools[0].function.name, "web_search", "Ollama tool name included");
+    delete payload.tools;
+
+    payload.ollamaThinkingMode = "none";
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assertEqual(body.reasoning_effort, "none", "Ollama thinking off maps to reasoning_effort none");
+
+    payload.ollamaThinkingMode = "low";
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assertEqual(body.reasoning_effort, "low", "Ollama low thinking maps to reasoning_effort low");
+
+    payload.ollamaThinkingMode = "medium";
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assertEqual(body.reasoning_effort, "medium", "Ollama medium thinking maps to reasoning_effort medium");
+
+    payload.ollamaThinkingMode = "high";
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assertEqual(body.reasoning_effort, "high", "Ollama high thinking maps to reasoning_effort high");
+
+    payload.ollamaThinkingMode = "invalid";
+    r = Providers.buildCurlCommand("ollama", payload, "");
+    body = parseCurlConfigBody(r.body);
+    assertEqual(body.reasoning_effort, undefined, "invalid Ollama thinking mode falls back to default");
+    payload.ollamaThinkingMode = "default";
 
     // OpenAI (key required)
     payload.provider = "openai";

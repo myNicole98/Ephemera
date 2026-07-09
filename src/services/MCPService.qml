@@ -1,14 +1,14 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
-import qs.Services
+import "../lib/Providers.js" as Providers
 
 Item {
     id: root
 
     // --- Configuration ---
     property string mcpUrl: ""
-    property string mcpToken: ""
+    property string mcpCommand: "mcp-remote"
     property bool enabled: false
 
     // --- State ---
@@ -20,6 +20,9 @@ Item {
     property var _pendingRequests: ({})   // id -> { resolve, reject }
     property string _readBuffer: ""
     property bool _initialized: false
+    property bool _manualDisconnect: false
+    readonly property int _connectionTimeoutMs: 15000
+    readonly property int _maxStdoutBytes: 5242880
 
     // --- Signals ---
     signal toolCallCompleted(var callId, string result)
@@ -30,9 +33,23 @@ Item {
     // --- Public API ---
 
     function connectToServer() {
+        _manualDisconnect = false;
         if (connecting || isConnected) return;
-        if (!mcpUrl || !mcpToken) {
-            connectionError = "MCP URL and token are required.";
+        if (!enabled) {
+            connectionError = "";
+            return;
+        }
+        if (!mcpUrl || !mcpCommand) {
+            connectionError = "MCP URL and bridge command are required.";
+            return;
+        }
+        var validated = Providers.validateUrl(mcpUrl);
+        if (!validated.valid) {
+            connectionError = validated.error || "Invalid MCP URL.";
+            return;
+        }
+        if (!_validCommand(mcpCommand)) {
+            connectionError = "MCP bridge command must be a single executable path.";
             return;
         }
         connectionError = "";
@@ -42,20 +59,25 @@ Item {
         _pendingRequests = ({});
         _nextId = 1;
         tools = [];
+        mcpStdout.lastLen = 0;
+        connectionTimer.restart();
 
-        mcpProcess.command = [
-            "npx", "-y", "mcp-remote",
-            mcpUrl,
-            "--allow-http",
-            "--header", "Authorization: Bearer " + mcpToken
-        ];
+        var cmd = [mcpCommand, mcpUrl];
+        if (mcpUrl.toLowerCase().indexOf("http://") === 0)
+            cmd.push("--allow-http");
+        mcpProcess.command = cmd;
         mcpProcess.running = true;
     }
 
     function disconnectFromServer() {
-        if (mcpProcess.running)
+        connectionError = "";
+        if (mcpProcess.running) {
+            _manualDisconnect = true;
             mcpProcess.running = false;
-        _reset();
+        } else {
+            _manualDisconnect = false;
+        }
+        _reset("MCP disconnected.");
     }
 
     function reconnectToServer() {
@@ -65,6 +87,8 @@ Item {
 
     // Call a tool by name with arguments. Returns the request id.
     function callTool(toolName, args) {
+        if (!isConnected)
+            return -1;
         var id = _nextId++;
         _pendingRequests[id] = {
                 resolve: function(result) {
@@ -106,12 +130,30 @@ Item {
 
     // --- Internal ---
 
-    function _reset() {
+    function _validCommand(command) {
+        var c = String(command || "").trim();
+        return c.length > 0 && /^[A-Za-z0-9_./+-]+$/.test(c);
+    }
+
+    function _failPendingRequests(message) {
+        var pending = _pendingRequests;
+        _pendingRequests = ({});
+        for (var id in pending) {
+            if (pending[id] && pending[id].reject)
+                pending[id].reject(message);
+        }
+    }
+
+    function _reset(failMessage) {
+        if (failMessage)
+            _failPendingRequests(failMessage);
+        else
+            _pendingRequests = ({});
+        connectionTimer.stop();
         isConnected = false;
         connecting = false;
         _initialized = false;
         _readBuffer = "";
-        _pendingRequests = ({});
         tools = [];
         mcpConnectionStateChanged();
     }
@@ -175,6 +217,7 @@ Item {
                 connectionError = "Initialize failed: " + err;
                 connecting = false;
                 mcpConnectionStateChanged();
+                connectionTimer.stop();
             }
         };
         _sendRequest(id, {
@@ -206,11 +249,13 @@ Item {
                 connectionError = "";
                 mcpConnectionStateChanged();
                 mcpToolsUpdated();
+                connectionTimer.stop();
             },
             reject: function(err) {
                 connectionError = "Failed to list tools: " + err;
                 connecting = false;
                 mcpConnectionStateChanged();
+                connectionTimer.stop();
             }
         };
         _sendRequest(id, {
@@ -232,6 +277,18 @@ Item {
 
     // --- Process ---
 
+    Timer {
+        id: connectionTimer
+        interval: root._connectionTimeoutMs
+        repeat: false
+        onTriggered: {
+            root.connectionError = "MCP connection timed out.";
+            if (mcpProcess.running)
+                mcpProcess.running = false;
+            root._reset(root.connectionError);
+        }
+    }
+
     Process {
         id: mcpProcess
         running: false
@@ -242,9 +299,9 @@ Item {
                 // Send initialize once the process starts
                 Qt.callLater(root._sendInitialize);
             } else {
-                if (root.isConnected || root.connecting) {
+                if (!root._manualDisconnect && (root.isConnected || root.connecting)) {
                     root.connectionError = "MCP process exited unexpectedly.";
-                    root._reset();
+                    root._reset(root.connectionError);
                 }
             }
         }
@@ -255,6 +312,12 @@ Item {
             property int lastLen: 0
 
             onTextChanged: {
+                if (text.length > root._maxStdoutBytes) {
+                    root.connectionError = "MCP output exceeded maximum buffer size.";
+                    mcpProcess.running = false;
+                    root._reset(root.connectionError);
+                    return;
+                }
                 var newData = text.substring(lastLen);
                 lastLen = text.length;
                 root._readBuffer += newData;
@@ -263,10 +326,15 @@ Item {
         }
 
         onExited: exitCode => {
+            if (root._manualDisconnect) {
+                root._manualDisconnect = false;
+                root._reset("MCP disconnected.");
+                return;
+            }
             if (exitCode !== 0 && (root.isConnected || root.connecting)) {
                 root.connectionError = "MCP process exited with code " + exitCode + ".";
             }
-            root._reset();
+            root._reset(root.connectionError || "MCP process exited.");
         }
     }
 }

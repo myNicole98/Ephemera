@@ -84,6 +84,55 @@ SettingsCard {
             }
         }
 
+        // Ollama thinking mode
+        AccordionSection {
+            show: aiService.provider === "ollama"
+
+            Row {
+                width: parent.width
+                spacing: Theme.spacingM
+
+                DankIcon {
+                    name: "psychology"
+                    size: Theme.iconSize
+                    color: Theme.primary
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Column {
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Theme.spacingXS
+                    width: parent.width - parent.spacing - Theme.iconSize
+
+                    StyledText {
+                        text: "Ollama Thinking"
+                        font.pixelSize: Theme.fontSizeMedium
+                        font.weight: Font.Medium
+                        color: Theme.surfaceText
+                    }
+
+                    StyledText {
+                        text: "Controls reasoning effort for Ollama models that support it."
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.surfaceVariantText
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+                }
+            }
+
+            DankDropdown {
+                width: parent.width
+                options: ["Default", "Off", "Low", "Medium", "High"]
+                currentValue: root._ollamaThinkingLabel(aiService.ollamaThinkingMode)
+                onValueChanged: value => {
+                    var mode = root._ollamaThinkingMode(value);
+                    aiService.ollamaThinkingMode = mode;
+                    aiService.saveSettingValue("ollamaThinkingMode", mode);
+                }
+            }
+        }
+
         // Custom base URL
         AccordionSection {
             show: aiService.provider === "custom"
@@ -296,5 +345,25 @@ SettingsCard {
             customUrlField.editingFinished();
         if (aiService.provider === "ollama" && ollamaUrlField.text.trim())
             ollamaUrlField.editingFinished();
+    }
+
+    function _ollamaThinkingLabel(mode) {
+        switch (String(mode || "default").toLowerCase()) {
+        case "none": return "Off";
+        case "low": return "Low";
+        case "medium": return "Medium";
+        case "high": return "High";
+        default: return "Default";
+        }
+    }
+
+    function _ollamaThinkingMode(label) {
+        switch (label) {
+        case "Off": return "none";
+        case "Low": return "low";
+        case "Medium": return "medium";
+        case "High": return "high";
+        default: return "default";
+        }
     }
 }
