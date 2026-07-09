@@ -73,17 +73,6 @@ function _stableStringify(value) {
     return "{" + fields.join(",") + "}";
 }
 
-function _hashString(text) {
-    var hash = 2166136261;
-    var str = String(text || "");
-    for (var i = 0; i < str.length; i++) {
-        hash ^= str.charCodeAt(i);
-        hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
-        hash = hash >>> 0;
-    }
-    return ("00000000" + hash.toString(16)).slice(-8);
-}
-
 /**
  * Normalize a list of allowed tool names into unique trimmed strings.
  *
@@ -154,7 +143,7 @@ function pruneAllowedTools(allowedNames, tools) {
  * Build a stable fingerprint for a tool's executable contract.
  *
  * @param {Object} tool - MCP tools/list entry.
- * @returns {string} Stable non-cryptographic fingerprint.
+ * @returns {string} Stable serialized contract.
  */
 function toolFingerprint(tool) {
     if (!tool || tool.name === undefined)
@@ -167,7 +156,7 @@ function toolFingerprint(tool) {
         outputSchema: tool.outputSchema || {},
         annotations: tool.annotations || {}
     };
-    return _hashString(_stableStringify(contract));
+    return _stableStringify(contract);
 }
 
 /**
@@ -349,4 +338,51 @@ function formatToolResult(result) {
  */
 function isToolError(result) {
     return !!(result && result.isError === true);
+}
+
+/**
+ * Normalize tool-call arguments from provider-specific payload shapes.
+ *
+ * @param {Object|string} args - Tool arguments from a model tool call.
+ * @returns {Object} Parsed argument object, or an empty object on invalid input.
+ */
+function parseToolArguments(args) {
+    if (typeof args === "string") {
+        try {
+            var parsed = JSON.parse(args);
+            return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        } catch (e) {
+            return {};
+        }
+    }
+    if (args && typeof args === "object" && !Array.isArray(args))
+        return args;
+    return {};
+}
+
+/**
+ * Format tool arguments for a compact user approval prompt.
+ *
+ * @param {Object|string} args - Tool arguments.
+ * @param {number} maxChars - Maximum characters before truncation.
+ * @returns {string} Pretty JSON/string preview.
+ */
+function formatToolArguments(args, maxChars) {
+    var text = "";
+    if (args === undefined || args === null) {
+        text = "{}";
+    } else if (typeof args === "string") {
+        text = args;
+    } else {
+        try {
+            text = JSON.stringify(args, null, 2);
+        } catch (e) {
+            text = String(args);
+        }
+    }
+
+    var limit = Number(maxChars) || 0;
+    if (limit > 0 && text.length > limit)
+        return text.substring(0, limit) + "\n\n[Arguments truncated]";
+    return text || "{}";
 }

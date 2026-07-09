@@ -336,6 +336,23 @@ Item {
                     onClicked: list.scrollToBottom()
                 }
             }
+
+            McpToolApprovalPrompt {
+                id: toolApprovalPrompt
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: Theme.spacingM
+                width: parent.width - Theme.spacingL * 2
+                visible: aiService.mcpToolApprovalPending
+                toolName: aiService.mcpPendingToolName
+                argumentsPreview: aiService.mcpPendingToolArgumentsPreview
+                z: 20
+                onRejectRequested: {
+                    aiService.rejectMcpToolCall();
+                    chatToast.show("Tool call rejected");
+                }
+                onApproveRequested: aiService.approveMcpToolCall()
+            }
         }
 
         // -- Composer --

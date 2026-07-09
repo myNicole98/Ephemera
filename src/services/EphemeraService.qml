@@ -28,6 +28,9 @@ Item {
     property alias apiOutputTokens: streamingService._apiOutputTokens
     property alias lastRequestFailed: streamingService.lastRequestFailed
     property alias lastHttpStatus: streamingService.lastHttpStatus
+    readonly property bool mcpToolApprovalPending: streamingService.toolApprovalPending
+    readonly property string mcpPendingToolName: streamingService.pendingToolName
+    readonly property string mcpPendingToolArgumentsPreview: streamingService.pendingToolArgumentsPreview
 
     // --- Persistence (opt-in) ---
     property bool persistChat: false
@@ -48,15 +51,15 @@ Item {
     property bool panelOnLeft: false
     // --- MCP ---
     property bool mcpEnabled: false
-    property bool mcpAutoExecuteTools: false
-    property string mcpAutoExecuteTrustKey: ""
+    property bool mcpAllowToolRequests: false
+    property string mcpToolRequestsTrustKey: ""
     property string mcpUrl: ""
     property string mcpCommand: "mcp-remote"
     property var mcpAllowedTools: []
     property string mcpAllowedToolsTrustKey: ""
     property alias mcpService: mcpServiceInstance
     readonly property string mcpTrustKey: Mcp.trustKey(mcpUrl, mcpCommand)
-    readonly property bool mcpToolCallsAllowed: isOllama && mcpEnabled && mcpAutoExecuteTools && mcpAutoExecuteTrustKey === mcpTrustKey
+    readonly property bool mcpToolRequestsAllowed: isOllama && mcpEnabled && mcpAllowToolRequests && mcpToolRequestsTrustKey === mcpTrustKey
     readonly property var activeMcpAllowedTools: mcpAllowedToolsTrustKey === mcpTrustKey ? mcpAllowedTools : []
 
     // --- Ollama (delegated to OllamaManager) ---
@@ -148,8 +151,9 @@ Item {
         onStreamFinalized: (streamId, stats) => root._applyFinalize(streamId, stats)
         onStreamError: (streamId, message) => root._applyError(streamId, message)
         onStreamCancelled: (streamId, stats) => root._applyCancelled(streamId, stats)
-        mcpService: root.mcpToolCallsAllowed ? mcpServiceInstance : null
-        toolCallsAllowed: root.mcpToolCallsAllowed
+        mcpService: root.mcpToolRequestsAllowed ? mcpServiceInstance : null
+        toolCallsAllowed: root.mcpToolRequestsAllowed
+        requireToolApproval: true
         allowedToolApprovals: root.activeMcpAllowedTools
         onStreamToolRoundReady: (streamId, messages) => root._launchCurlWithMessages(messages)
     }
@@ -222,8 +226,8 @@ Item {
         thinkingEnabled = PluginService.loadPluginData(pluginId, "thinkingEnabled", false) === true;
         panelOnLeft = PluginService.loadPluginData(pluginId, "panelOnLeft", false) === true;
         mcpEnabled = PluginService.loadPluginData(pluginId, "mcpEnabled", false) === true;
-        mcpAutoExecuteTools = PluginService.loadPluginData(pluginId, "mcpAutoExecuteTools", false) === true;
-        mcpAutoExecuteTrustKey = String(PluginService.loadPluginData(pluginId, "mcpAutoExecuteTrustKey", ""));
+        mcpAllowToolRequests = PluginService.loadPluginData(pluginId, "mcpToolRequestsAllowed", PluginService.loadPluginData(pluginId, "mcpAutoExecuteTools", false)) === true;
+        mcpToolRequestsTrustKey = String(PluginService.loadPluginData(pluginId, "mcpToolRequestsTrustKey", PluginService.loadPluginData(pluginId, "mcpAutoExecuteTrustKey", "")));
         mcpUrl = String(PluginService.loadPluginData(pluginId, "mcpUrl", "")).trim();
         mcpCommand = String(PluginService.loadPluginData(pluginId, "mcpCommand", "mcp-remote")).trim() || "mcp-remote";
         if (mcpCommand !== "mcp-remote")
@@ -268,18 +272,18 @@ Item {
         PluginService.savePluginData(pluginId, key, value);
     }
 
-    function setMcpAutoExecuteTools(enabled) {
+    function setMcpToolRequestsAllowed(enabled) {
         var allowed = enabled === true;
-        mcpAutoExecuteTools = allowed;
-        mcpAutoExecuteTrustKey = allowed ? mcpTrustKey : "";
+        mcpAllowToolRequests = allowed;
+        mcpToolRequestsTrustKey = allowed ? mcpTrustKey : "";
         if (allowed && mcpAllowedToolsTrustKey !== mcpTrustKey) {
             mcpAllowedTools = [];
             mcpAllowedToolsTrustKey = mcpTrustKey;
             saveSettingValue("mcpAllowedTools", JSON.stringify(mcpAllowedTools));
             saveSettingValue("mcpAllowedToolsTrustKey", mcpAllowedToolsTrustKey);
         }
-        saveSettingValue("mcpAutoExecuteTools", allowed);
-        saveSettingValue("mcpAutoExecuteTrustKey", mcpAutoExecuteTrustKey);
+        saveSettingValue("mcpToolRequestsAllowed", allowed);
+        saveSettingValue("mcpToolRequestsTrustKey", mcpToolRequestsTrustKey);
     }
 
     function setMcpUrl(url) {
@@ -287,7 +291,7 @@ Item {
         if (next === mcpUrl) return;
         if (mcpServiceInstance.isConnected || mcpServiceInstance.connecting)
             mcpServiceInstance.disconnectFromServer();
-        setMcpAutoExecuteTools(false);
+        setMcpToolRequestsAllowed(false);
         clearMcpToolAllowlist();
         mcpUrl = next;
         saveSettingValue("mcpUrl", next);
@@ -300,7 +304,7 @@ Item {
         if (next === mcpCommand) return;
         if (mcpServiceInstance.isConnected || mcpServiceInstance.connecting)
             mcpServiceInstance.disconnectFromServer();
-        setMcpAutoExecuteTools(false);
+        setMcpToolRequestsAllowed(false);
         clearMcpToolAllowlist();
         mcpCommand = next;
         saveSettingValue("mcpCommand", next);
@@ -316,6 +320,14 @@ Item {
         mcpAllowedToolsTrustKey = mcpTrustKey;
         saveSettingValue("mcpAllowedTools", JSON.stringify(mcpAllowedTools));
         saveSettingValue("mcpAllowedToolsTrustKey", mcpAllowedToolsTrustKey);
+    }
+
+    function approveMcpToolCall() {
+        return streamingService.approvePendingToolCall();
+    }
+
+    function rejectMcpToolCall() {
+        return streamingService.rejectPendingToolCall("Tool call rejected by user.");
     }
 
     function clearMcpToolAllowlist() {
@@ -668,7 +680,7 @@ Item {
             ollamaThinkingMode: ollamaThinkingMode,
             thinkingEnabled: thinkingEnabled
         };
-        if (provider === "ollama" && root.mcpToolCallsAllowed && mcpServiceInstance.isConnected) {
+        if (provider === "ollama" && root.mcpToolRequestsAllowed && mcpServiceInstance.isConnected) {
             var tools = mcpServiceInstance.getOllamaTools(activeMcpAllowedTools);
             if (tools.length > 0)
                 payload.tools = tools;
@@ -679,7 +691,7 @@ Item {
     function _launchCurlWithMessages(messages) {
         var payload = _buildPayload(lastUserText);
         payload.messages = messages;
-        if (provider === "ollama" && mcpToolCallsAllowed && mcpServiceInstance.isConnected) {
+        if (provider === "ollama" && mcpToolRequestsAllowed && mcpServiceInstance.isConnected) {
             var tools = mcpServiceInstance.getOllamaTools(activeMcpAllowedTools);
             if (tools.length > 0)
                 payload.tools = tools;
@@ -689,6 +701,9 @@ Item {
             _applyError(activeStreamId, "Could not resume after MCP tool call.");
             return;
         }
+        var payloadIdx = findIndexById(activeStreamId);
+        if (payloadIdx >= 0)
+            messagesModel.setProperty(payloadIdx, "requestPayload", JSON.stringify(payload, null, 2));
         streamingService.launchCurl(result, messages);
     }
 

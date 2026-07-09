@@ -100,17 +100,17 @@ SettingsCard {
                 Column {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Theme.spacingXS
-                    width: parent.width - parent.spacing * 2 - Theme.iconSize - autoExecuteToggle.width
+                    width: parent.width - parent.spacing * 2 - Theme.iconSize - toolRequestsToggle.width
 
                     StyledText {
-                        text: "Allow Model Tool Calls"
+                        text: "Allow Model Tool Requests"
                         font.pixelSize: Theme.fontSizeMedium
                         font.weight: Font.Medium
                         color: Theme.surfaceText
                     }
 
                     StyledText {
-                        text: "Only selected tools may run automatically for trusted MCP servers."
+                        text: "Only selected tools may be requested; every tool run needs approval."
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.surfaceVariantText
                         wrapMode: Text.WordWrap
@@ -119,12 +119,12 @@ SettingsCard {
                 }
 
                 Switch {
-                    id: autoExecuteToggle
-                    checked: aiService.mcpToolCallsAllowed
+                    id: toolRequestsToggle
+                    checked: aiService.mcpToolRequestsAllowed
                     enabled: aiService.isOllama
                     anchors.verticalCenter: parent.verticalCenter
                     onToggled: {
-                        aiService.setMcpAutoExecuteTools(checked);
+                        aiService.setMcpToolRequestsAllowed(checked);
                     }
                 }
             }

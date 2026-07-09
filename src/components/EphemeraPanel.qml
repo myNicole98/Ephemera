@@ -78,12 +78,25 @@ PanelWindow {
         anchors.left: panelOnLeft ? parent.left : undefined
         width: alignedWidth
 
-        property real offset: panelOnLeft ? -alignedWidth : alignedWidth
+        property real offset: hiddenOffset()
+
+        function hiddenOffset() {
+            return root.panelOnLeft ? -slide.width : slide.width;
+        }
+
+        function syncOffset() {
+            slide.offset = root.isVisible ? 0 : hiddenOffset();
+        }
+
+        onWidthChanged: syncOffset()
 
         Connections {
             target: root
             function onIsVisibleChanged() {
-                slide.offset = root.isVisible ? 0 : (panelOnLeft ? -slide.width : slide.width);
+                slide.syncOffset();
+            }
+            function onPanelOnLeftChanged() {
+                slide.syncOffset();
             }
         }
 

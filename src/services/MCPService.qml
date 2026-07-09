@@ -279,10 +279,7 @@ Item {
         _pendingRequests[id] = {
             resolve: function(result) { _onInitialized(result); },
             reject: function(err) {
-                connectionError = "Initialize failed: " + err;
-                connecting = false;
-                mcpConnectionStateChanged();
-                connectionTimer.stop();
+                _abortConnection("Initialize failed: " + err);
             }
         };
         _sendRequest(id, {
@@ -332,10 +329,7 @@ Item {
                 connectionTimer.stop();
             },
             reject: function(err) {
-                connectionError = "Failed to list tools: " + err;
-                connecting = false;
-                mcpConnectionStateChanged();
-                connectionTimer.stop();
+                _abortConnection("Failed to list tools: " + err);
             }
         };
         _sendRequest(id, {
@@ -362,10 +356,7 @@ Item {
         interval: root._connectionTimeoutMs
         repeat: false
         onTriggered: {
-            root.connectionError = "MCP connection timed out.";
-            if (mcpProcess.running)
-                mcpProcess.running = false;
-            root._reset(root.connectionError);
+            root._abortConnection("MCP connection timed out.");
         }
     }
 

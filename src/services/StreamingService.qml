@@ -35,16 +35,25 @@ Item {
     property var _toolResults: []
     property var mcpService: null
     property bool toolCallsAllowed: false
+    property bool requireToolApproval: true
     property var allowedToolApprovals: []
     property var _conversationMessages: []
     property int _pendingCallId: -1
     property var _pendingToolCallMeta: null
     property var _pendingToolCallService: null
+    property var _pendingApprovalToolCall: null
+    property string _pendingApprovalToolName: ""
+    property var _pendingApprovalToolArgs: ({})
+    property string _pendingApprovalToolArgumentsPreview: ""
     property bool _awaitingToolExecution: false
     property int _toolRoundCount: 0
     readonly property int _maxToolRounds: 4
     readonly property int _maxToolResultChars: 20000
+    readonly property int _maxToolArgumentsPreviewChars: 4000
     readonly property int _toolCallTimeoutMs: 30000
+    readonly property bool toolApprovalPending: _pendingApprovalToolCall !== null
+    readonly property string pendingToolName: _pendingApprovalToolName
+    readonly property string pendingToolArgumentsPreview: _pendingApprovalToolArgumentsPreview
     property int lastHttpStatus: 0
     property bool lastRequestFailed: false
 
@@ -110,6 +119,28 @@ Item {
 
         streamCancelled(streamId, _buildStreamStats());
         chatFetcher.running = false;
+    }
+
+    function approvePendingToolCall() {
+        if (!toolApprovalPending || !isStreaming)
+            return false;
+        var toolName = _pendingApprovalToolName;
+        var toolArgs = _pendingApprovalToolArgs;
+        _clearPendingToolApproval();
+        _invokeToolCall(toolName, toolArgs);
+        return true;
+    }
+
+    function rejectPendingToolCall(reason) {
+        if (!toolApprovalPending || !isStreaming)
+            return false;
+        var toolName = _pendingApprovalToolName;
+        var message = reason || "Tool call rejected by user.";
+        _applyThinkingDelta(activeStreamId, "Tool rejected: " + toolName + "\n");
+        _recordToolResult(toolName, "Error: " + message);
+        _clearPendingToolApproval();
+        _executeNextToolCall();
+        return true;
     }
 
     function reset() {
@@ -242,6 +273,7 @@ Item {
         var service = _pendingToolCallService || mcpService;
         if (cancelPending && _pendingCallId >= 0 && service && service.cancelRequest)
             service.cancelRequest(_pendingCallId, reason || "Tool call cancelled.");
+        _clearPendingToolApproval();
         _seenToolCalls = false;
         _pendingToolCalls = [];
         _allToolCalls = [];
@@ -252,6 +284,13 @@ Item {
         _pendingToolCallMeta = null;
         _pendingToolCallService = null;
         toolCallTimer.stop();
+    }
+
+    function _clearPendingToolApproval() {
+        _pendingApprovalToolCall = null;
+        _pendingApprovalToolName = "";
+        _pendingApprovalToolArgs = ({});
+        _pendingApprovalToolArgumentsPreview = "";
     }
 
     function handleStreamFinished(text) {
@@ -306,12 +345,11 @@ Item {
         var toolCall = _pendingToolCalls.shift();
         var toolName = toolCall.function ? toolCall.function.name : toolCall.name;
         var toolArgs = toolCall.function ? toolCall.function.arguments : toolCall.arguments;
-        if (typeof toolArgs === "string") {
-            try { toolArgs = JSON.parse(toolArgs); } catch(e) { toolArgs = {}; }
-        }
+        toolArgs = Mcp.parseToolArguments(toolArgs);
         toolName = _toolCallName(toolCall, toolName);
-        if (!toolCallsAllowed) {
-            _markError(activeStreamId, "MCP tool call blocked. Enable automatic tool calls in MCP settings to let the model run tools.");
+        var blockMessage = _toolPermissionBlockMessage(toolName);
+        if (blockMessage) {
+            _markError(activeStreamId, blockMessage);
             return;
         }
         if (!mcpService || !mcpService.isConnected) {
@@ -319,8 +357,46 @@ Item {
             _executeNextToolCall();
             return;
         }
+        if (requireToolApproval) {
+            _requestToolApproval(toolCall, toolName, toolArgs);
+            return;
+        }
+        _invokeToolCall(toolName, toolArgs);
+    }
+
+    function _toolPermissionBlockMessage(toolName) {
+        if (!toolCallsAllowed) {
+            return "MCP tool call blocked. Enable model tool calls in MCP settings to let the model request tools.";
+        }
+        if (!mcpService) {
+            return "MCP tool call blocked. MCP service is not available.";
+        }
+        if (!mcpService.isConnected) {
+            return "MCP tool call blocked. MCP service is not connected.";
+        }
         if (!mcpService.isToolAllowed(toolName, allowedToolApprovals)) {
-            _markError(activeStreamId, "MCP tool call blocked. The tool '" + toolName + "' is not allowed in MCP settings.");
+            return "MCP tool call blocked. The tool '" + toolName + "' is not allowed in MCP settings.";
+        }
+        return "";
+    }
+
+    function _requestToolApproval(toolCall, toolName, toolArgs) {
+        _pendingApprovalToolCall = toolCall;
+        _pendingApprovalToolName = toolName;
+        _pendingApprovalToolArgs = toolArgs || {};
+        _pendingApprovalToolArgumentsPreview = Mcp.formatToolArguments(toolArgs, _maxToolArgumentsPreviewChars);
+        _applyThinkingDelta(activeStreamId, "\nTool request awaiting approval: " + toolName + "\n");
+    }
+
+    function _invokeToolCall(toolName, toolArgs) {
+        var blockMessage = _toolPermissionBlockMessage(toolName);
+        if (blockMessage) {
+            _markError(activeStreamId, blockMessage);
+            return;
+        }
+        if (!mcpService || !mcpService.isConnected) {
+            _recordToolResult(toolName, "Error: MCP service not connected");
+            _executeNextToolCall();
             return;
         }
         _applyThinkingDelta(activeStreamId, "\nCalling tool: " + toolName + "\n");

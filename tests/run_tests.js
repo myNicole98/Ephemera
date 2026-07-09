@@ -1253,7 +1253,8 @@ section("Mcp tool approval helpers");
 
     var key = Mcp.toolApprovalKey(searchTool);
     assert(key.indexOf("search\n") === 0, "approval key includes tool name prefix");
-    assertEqual(Mcp.toolFingerprint(searchTool), Mcp.toolFingerprint(sameSearchTool), "fingerprint is stable across object key order");
+    assert(key.indexOf("Search documents") >= 0, "approval key includes the serialized tool contract");
+    assertEqual(Mcp.toolFingerprint(searchTool), Mcp.toolFingerprint(sameSearchTool), "contract fingerprint is stable across object key order");
 
     var approvals = Mcp.setToolApproved([], searchTool, true);
     assertEqual(approvals.length, 1, "adds exact tool approval");
@@ -1267,6 +1268,19 @@ section("Mcp tool approval helpers");
 
     approvals = Mcp.setToolApproved(approvals, searchTool, false);
     assertEqual(approvals.length, 0, "removes exact tool approval");
+})();
+
+section("Mcp tool argument helpers");
+(function() {
+    var parsed = Mcp.parseToolArguments('{"query":"ephemera"}');
+    assertEqual(parsed.query, "ephemera", "parses JSON argument string");
+    assertEqual(Object.keys(Mcp.parseToolArguments("not json")).length, 0, "invalid JSON arguments become empty object");
+    assertEqual(Object.keys(Mcp.parseToolArguments(["bad"])).length, 0, "array arguments become empty object");
+
+    var preview = Mcp.formatToolArguments({ query: "ephemera" }, 100);
+    assert(preview.indexOf('"query": "ephemera"') >= 0, "formats object arguments as pretty JSON");
+    preview = Mcp.formatToolArguments({ query: "ephemera", body: "abcdef" }, 12);
+    assert(preview.indexOf("[Arguments truncated]") >= 0, "truncates long argument previews");
 })();
 
 section("Mcp.buildToolResumeMessages");
