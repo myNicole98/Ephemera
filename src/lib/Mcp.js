@@ -11,14 +11,8 @@ function trustKey(url, command) {
     return String(command || "").trim() + "\n" + String(url || "").trim();
 }
 
-/**
- * Normalize a list of allowed tool names into unique trimmed strings.
- *
- * @param {Array|string} names - Tool names or a JSON-encoded array.
- * @returns {Array<string>} Unique tool names.
- */
-function normalizeToolNames(names) {
-    var input = names;
+function _normalizeStringArray(values) {
+    var input = values;
     if (typeof input === "string") {
         try { input = JSON.parse(input); } catch (e) { input = []; }
     }
@@ -27,12 +21,77 @@ function normalizeToolNames(names) {
     var seen = {};
     var result = [];
     for (var i = 0; i < input.length; i++) {
-        var name = String(input[i] || "").trim();
-        if (!name || seen[name]) continue;
-        seen[name] = true;
-        result.push(name);
+        var value = String(input[i] || "").trim();
+        if (!value || seen[value]) continue;
+        seen[value] = true;
+        result.push(value);
     }
     return result;
+}
+
+function _setStringAllowed(values, value, allowed) {
+    var current = _normalizeStringArray(values);
+    var key = String(value || "").trim();
+    if (!key) return current;
+
+    var result = [];
+    var found = false;
+    for (var i = 0; i < current.length; i++) {
+        if (current[i] === key) {
+            found = true;
+            if (allowed === true)
+                result.push(current[i]);
+        } else {
+            result.push(current[i]);
+        }
+    }
+    if (allowed === true && !found)
+        result.push(key);
+    return result;
+}
+
+function _stableStringify(value) {
+    if (value === undefined)
+        return "null";
+    if (value === null || typeof value !== "object")
+        return JSON.stringify(value);
+    if (Array.isArray(value)) {
+        var parts = [];
+        for (var i = 0; i < value.length; i++)
+            parts.push(_stableStringify(value[i]));
+        return "[" + parts.join(",") + "]";
+    }
+
+    var keys = Object.keys(value).sort();
+    var fields = [];
+    for (var j = 0; j < keys.length; j++) {
+        var key = keys[j];
+        if (value[key] === undefined)
+            continue;
+        fields.push(JSON.stringify(key) + ":" + _stableStringify(value[key]));
+    }
+    return "{" + fields.join(",") + "}";
+}
+
+function _hashString(text) {
+    var hash = 2166136261;
+    var str = String(text || "");
+    for (var i = 0; i < str.length; i++) {
+        hash ^= str.charCodeAt(i);
+        hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+        hash = hash >>> 0;
+    }
+    return ("00000000" + hash.toString(16)).slice(-8);
+}
+
+/**
+ * Normalize a list of allowed tool names into unique trimmed strings.
+ *
+ * @param {Array|string} names - Tool names or a JSON-encoded array.
+ * @returns {Array<string>} Unique tool names.
+ */
+function normalizeToolNames(names) {
+    return _normalizeStringArray(names);
 }
 
 /**
@@ -62,24 +121,7 @@ function isToolAllowed(toolName, allowedNames) {
  * @returns {Array<string>} Updated allowlist.
  */
 function setToolAllowed(allowedNames, toolName, allowed) {
-    var current = normalizeToolNames(allowedNames);
-    var name = String(toolName || "").trim();
-    if (!name) return current;
-
-    var result = [];
-    var found = false;
-    for (var i = 0; i < current.length; i++) {
-        if (current[i] === name) {
-            found = true;
-            if (allowed === true)
-                result.push(current[i]);
-        } else {
-            result.push(current[i]);
-        }
-    }
-    if (allowed === true && !found)
-        result.push(name);
-    return result;
+    return _setStringAllowed(allowedNames, toolName, allowed);
 }
 
 /**
@@ -104,6 +146,106 @@ function pruneAllowedTools(allowedNames, tools) {
     for (var j = 0; j < allowed.length; j++) {
         if (available[allowed[j]])
             result.push(allowed[j]);
+    }
+    return result;
+}
+
+/**
+ * Build a stable fingerprint for a tool's executable contract.
+ *
+ * @param {Object} tool - MCP tools/list entry.
+ * @returns {string} Stable non-cryptographic fingerprint.
+ */
+function toolFingerprint(tool) {
+    if (!tool || tool.name === undefined)
+        return "";
+    var contract = {
+        name: String(tool.name || "").trim(),
+        title: tool.title || "",
+        description: tool.description || "",
+        inputSchema: tool.inputSchema || {},
+        outputSchema: tool.outputSchema || {},
+        annotations: tool.annotations || {}
+    };
+    return _hashString(_stableStringify(contract));
+}
+
+/**
+ * Build the persisted approval key for a specific tool contract.
+ *
+ * @param {Object} tool - MCP tools/list entry.
+ * @returns {string} Approval key containing tool name and schema fingerprint.
+ */
+function toolApprovalKey(tool) {
+    var name = tool && tool.name !== undefined ? String(tool.name || "").trim() : "";
+    if (!name) return "";
+    var fingerprint = toolFingerprint(tool);
+    if (!fingerprint) return "";
+    return name + "\n" + fingerprint;
+}
+
+/**
+ * Normalize persisted tool approval keys.
+ *
+ * @param {Array|string} approvals - Tool approval keys or a JSON-encoded array.
+ * @returns {Array<string>} Unique approval keys.
+ */
+function normalizeToolApprovalKeys(approvals) {
+    return _normalizeStringArray(approvals);
+}
+
+/**
+ * Return true if a specific current tool contract is approved.
+ *
+ * @param {Object} tool - MCP tools/list entry.
+ * @param {Array|string} approvals - Persisted approval keys.
+ * @returns {boolean} Whether the exact tool contract is approved.
+ */
+function isToolApproved(tool, approvals) {
+    var key = toolApprovalKey(tool);
+    if (!key) return false;
+    var normalized = normalizeToolApprovalKeys(approvals);
+    for (var i = 0; i < normalized.length; i++) {
+        if (normalized[i] === key)
+            return true;
+    }
+    return false;
+}
+
+/**
+ * Add or remove the current tool contract from persisted approvals.
+ *
+ * @param {Array|string} approvals - Current approval keys.
+ * @param {Object} tool - MCP tools/list entry.
+ * @param {boolean} allowed - Whether this exact contract should be approved.
+ * @returns {Array<string>} Updated approval keys.
+ */
+function setToolApproved(approvals, tool, allowed) {
+    return _setStringAllowed(approvals, toolApprovalKey(tool), allowed);
+}
+
+/**
+ * Keep only approvals that still match currently advertised tool contracts.
+ *
+ * @param {Array|string} approvals - Current approval keys.
+ * @param {Array} tools - MCP tools/list entries.
+ * @returns {Array<string>} Pruned approval keys.
+ */
+function pruneApprovedTools(approvals, tools) {
+    var approved = normalizeToolApprovalKeys(approvals);
+    if (!Array.isArray(tools) || tools.length === 0)
+        return [];
+
+    var available = {};
+    for (var i = 0; i < tools.length; i++) {
+        var key = toolApprovalKey(tools[i]);
+        if (key) available[key] = true;
+    }
+
+    var result = [];
+    for (var j = 0; j < approved.length; j++) {
+        if (available[approved[j]])
+            result.push(approved[j]);
     }
     return result;
 }

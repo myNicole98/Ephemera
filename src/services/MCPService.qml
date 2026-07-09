@@ -22,8 +22,11 @@ Item {
     property string _readBuffer: ""
     property bool _initialized: false
     property bool _manualDisconnect: false
+    property string _negotiatedProtocolVersion: ""
     readonly property int _connectionTimeoutMs: 15000
     readonly property int _maxStdoutBytes: 5242880
+    readonly property string _preferredProtocolVersion: "2025-06-18"
+    readonly property var _supportedProtocolVersions: ["2025-06-18", "2024-11-05"]
 
     // --- Signals ---
     signal toolCallCompleted(var callId, string result)
@@ -88,7 +91,7 @@ Item {
 
     // Call a tool by name with arguments. Returns the request id.
     function callTool(toolName, args) {
-        if (!isConnected)
+        if (!isConnected || !_findTool(toolName))
             return -1;
         var id = _nextId++;
         _pendingRequests[id] = {
@@ -116,12 +119,38 @@ Item {
         return id;
     }
 
+    function cancelRequest(id, reason) {
+        if (id === undefined || id === null)
+            return false;
+        if (!_pendingRequests[id])
+            return false;
+        delete _pendingRequests[id];
+        if (mcpProcess.running)
+            _sendNotification("notifications/cancelled", {
+                requestId: id,
+                reason: reason || "Request cancelled."
+            });
+        return true;
+    }
+
+    function isToolAllowed(toolName, approvedKeys) {
+        return Mcp.isToolApproved(_findTool(toolName), approvedKeys);
+    }
+
+    function setToolAllowed(approvedKeys, toolName, allowed) {
+        var current = Mcp.pruneApprovedTools(approvedKeys, tools);
+        var tool = _findTool(toolName);
+        if (!tool)
+            return current;
+        return Mcp.setToolApproved(current, tool, allowed === true);
+    }
+
     // Get tools formatted for Ollama /api/chat tools array
-    function getOllamaTools(allowedNames) {
+    function getOllamaTools(approvedKeys) {
         var result = [];
         for (var i = 0; i < tools.length; i++) {
             var t = tools[i];
-            if (!Mcp.isToolAllowed(t.name, allowedNames))
+            if (!Mcp.isToolApproved(t, approvedKeys))
                 continue;
             result.push({
                 type: "function",
@@ -142,6 +171,34 @@ Item {
         return c === "mcp-remote";
     }
 
+    function _supportsProtocolVersion(version) {
+        var v = String(version || "");
+        for (var i = 0; i < _supportedProtocolVersions.length; i++) {
+            if (_supportedProtocolVersions[i] === v)
+                return true;
+        }
+        return false;
+    }
+
+    function _findTool(toolName) {
+        var name = String(toolName || "").trim();
+        if (!name) return null;
+        for (var i = 0; i < tools.length; i++) {
+            if (tools[i] && String(tools[i].name || "").trim() === name)
+                return tools[i];
+        }
+        return null;
+    }
+
+    function _abortConnection(message) {
+        connectionError = message;
+        if (mcpProcess.running) {
+            _manualDisconnect = true;
+            mcpProcess.running = false;
+        }
+        _reset(message);
+    }
+
     function _failPendingRequests(message) {
         var pending = _pendingRequests;
         _pendingRequests = ({});
@@ -160,6 +217,7 @@ Item {
         isConnected = false;
         connecting = false;
         _initialized = false;
+        _negotiatedProtocolVersion = "";
         _readBuffer = "";
         tools = [];
         mcpConnectionStateChanged();
@@ -232,14 +290,24 @@ Item {
             id: id,
             method: "initialize",
             params: {
-                protocolVersion: "2024-11-05",
-                capabilities: { tools: {} },
+                protocolVersion: _preferredProtocolVersion,
+                capabilities: {},
                 clientInfo: { name: "ephemera", version: "1.0.0" }
             }
         });
     }
 
     function _onInitialized(result) {
+        var version = result && result.protocolVersion ? String(result.protocolVersion) : "";
+        if (!_supportsProtocolVersion(version)) {
+            _abortConnection("Unsupported MCP protocol version: " + (version || "unknown") + ".");
+            return;
+        }
+        if (!result || !result.capabilities || result.capabilities.tools === undefined) {
+            _abortConnection("MCP server does not advertise tools capability.");
+            return;
+        }
+        _negotiatedProtocolVersion = version;
         _sendNotification("notifications/initialized");
         _initialized = true;
         _listTools();

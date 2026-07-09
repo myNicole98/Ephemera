@@ -35,10 +35,11 @@ Item {
     property var _toolResults: []
     property var mcpService: null
     property bool toolCallsAllowed: false
-    property var allowedToolNames: []
+    property var allowedToolApprovals: []
     property var _conversationMessages: []
     property int _pendingCallId: -1
     property var _pendingToolCallMeta: null
+    property var _pendingToolCallService: null
     property bool _awaitingToolExecution: false
     property int _toolRoundCount: 0
     readonly property int _maxToolRounds: 4
@@ -105,12 +106,7 @@ Item {
         }
         _insideThinkTag = false;
         isStreaming = false;
-        _awaitingToolExecution = false;
-        _pendingToolCalls = [];
-        _toolResults = [];
-        _pendingCallId = -1;
-        _pendingToolCallMeta = null;
-        toolCallTimer.stop();
+        _clearToolState(true, "Stream cancelled.");
 
         streamCancelled(streamId, _buildStreamStats());
         chatFetcher.running = false;
@@ -128,15 +124,7 @@ Item {
         _streamThinking = "";
         _insideThinkTag = false;
         _tagBuffer = "";
-        _seenToolCalls = false;
-        _pendingToolCalls = [];
-        _allToolCalls = [];
-        _toolResults = [];
-        _awaitingToolExecution = false;
-        _toolRoundCount = 0;
-        _pendingCallId = -1;
-        _pendingToolCallMeta = null;
-        toolCallTimer.stop();
+        _clearToolState(true, "Stream reset.");
         streamBuffer = "";
         pendingStdinBody = "";
     }
@@ -152,15 +140,7 @@ Item {
         _streamThinking = "";
         _apiOutputTokens = 0;
         _streamVariantIndex = variantIndex;
-        _seenToolCalls = false;
-        _pendingToolCalls = [];
-        _allToolCalls = [];
-        _toolResults = [];
-        _awaitingToolExecution = false;
-        _toolRoundCount = 0;
-        _pendingCallId = -1;
-        _pendingToolCallMeta = null;
-        toolCallTimer.stop();
+        _clearToolState(false, "");
         _conversationMessages = messages || [];
     }
 
@@ -258,6 +238,22 @@ Item {
         });
     }
 
+    function _clearToolState(cancelPending, reason) {
+        var service = _pendingToolCallService || mcpService;
+        if (cancelPending && _pendingCallId >= 0 && service && service.cancelRequest)
+            service.cancelRequest(_pendingCallId, reason || "Tool call cancelled.");
+        _seenToolCalls = false;
+        _pendingToolCalls = [];
+        _allToolCalls = [];
+        _toolResults = [];
+        _awaitingToolExecution = false;
+        _toolRoundCount = 0;
+        _pendingCallId = -1;
+        _pendingToolCallMeta = null;
+        _pendingToolCallService = null;
+        toolCallTimer.stop();
+    }
+
     function handleStreamFinished(text) {
         var parsed = StreamParser.extractHttpStatus(text);
         lastHttpStatus = parsed.status;
@@ -318,13 +314,13 @@ Item {
             _markError(activeStreamId, "MCP tool call blocked. Enable automatic tool calls in MCP settings to let the model run tools.");
             return;
         }
-        if (!Mcp.isToolAllowed(toolName, allowedToolNames)) {
-            _markError(activeStreamId, "MCP tool call blocked. The tool '" + toolName + "' is not allowed in MCP settings.");
-            return;
-        }
         if (!mcpService || !mcpService.isConnected) {
             _recordToolResult(toolName, "Error: MCP service not connected");
             _executeNextToolCall();
+            return;
+        }
+        if (!mcpService.isToolAllowed(toolName, allowedToolApprovals)) {
+            _markError(activeStreamId, "MCP tool call blocked. The tool '" + toolName + "' is not allowed in MCP settings.");
             return;
         }
         _applyThinkingDelta(activeStreamId, "\nCalling tool: " + toolName + "\n");
@@ -336,6 +332,7 @@ Item {
         }
         _pendingCallId = callId;
         _pendingToolCallMeta = { name: toolName };
+        _pendingToolCallService = mcpService;
         toolCallTimer.restart();
     }
 
@@ -343,6 +340,7 @@ Item {
         if (callId !== _pendingCallId) return;
         toolCallTimer.stop();
         _pendingCallId = -1;
+        _pendingToolCallService = null;
         var resultText = (typeof result === "string") ? result : JSON.stringify(result);
         var preview = resultText.substring(0, 200) + (resultText.length > 200 ? "..." : "");
         _applyThinkingDelta(activeStreamId, "Tool result: " + preview + "\n");
@@ -355,6 +353,7 @@ Item {
         if (callId !== _pendingCallId) return;
         toolCallTimer.stop();
         _pendingCallId = -1;
+        _pendingToolCallService = null;
         _applyThinkingDelta(activeStreamId, "Tool error: " + error + "\n");
         _recordToolResult(_pendingToolCallMeta ? _pendingToolCallMeta.name : "unknown_tool", "Error: " + error);
         _pendingToolCallMeta = null;
@@ -388,8 +387,13 @@ Item {
         interval: root._toolCallTimeoutMs
         repeat: false
         onTriggered: {
-            if (root._pendingCallId >= 0)
-                root._onToolCallFailed(root._pendingCallId, "MCP tool call timed out.");
+            if (root._pendingCallId >= 0) {
+                var callId = root._pendingCallId;
+                var service = root._pendingToolCallService || root.mcpService;
+                if (service && service.cancelRequest)
+                    service.cancelRequest(callId, "MCP tool call timed out.");
+                root._onToolCallFailed(callId, "MCP tool call timed out.");
+            }
         }
     }
 

@@ -1219,6 +1219,56 @@ section("Mcp tool allowlist helpers");
     assertEqual(names[0], "search", "keeps available allowed tool");
 })();
 
+section("Mcp tool approval helpers");
+(function() {
+    var searchTool = {
+        name: "search",
+        description: "Search documents",
+        inputSchema: {
+            type: "object",
+            properties: {
+                query: { type: "string" },
+                limit: { type: "integer" }
+            },
+            required: ["query"]
+        }
+    };
+    var sameSearchTool = {
+        inputSchema: {
+            required: ["query"],
+            properties: {
+                limit: { type: "integer" },
+                query: { type: "string" }
+            },
+            type: "object"
+        },
+        description: "Search documents",
+        name: "search"
+    };
+    var changedSearchTool = {
+        name: "search",
+        description: "Search and write documents",
+        inputSchema: searchTool.inputSchema
+    };
+
+    var key = Mcp.toolApprovalKey(searchTool);
+    assert(key.indexOf("search\n") === 0, "approval key includes tool name prefix");
+    assertEqual(Mcp.toolFingerprint(searchTool), Mcp.toolFingerprint(sameSearchTool), "fingerprint is stable across object key order");
+
+    var approvals = Mcp.setToolApproved([], searchTool, true);
+    assertEqual(approvals.length, 1, "adds exact tool approval");
+    assertEqual(Mcp.isToolApproved(searchTool, approvals), true, "approves current tool contract");
+    assertEqual(Mcp.isToolApproved(sameSearchTool, approvals), true, "same contract stays approved");
+    assertEqual(Mcp.isToolApproved(changedSearchTool, approvals), false, "changed tool contract is not approved");
+    assertEqual(Mcp.isToolApproved(searchTool, ["search"]), false, "name-only approval does not authorize a tool");
+
+    var pruned = Mcp.pruneApprovedTools(approvals, [changedSearchTool]);
+    assertEqual(pruned.length, 0, "prunes approvals when advertised contract changes");
+
+    approvals = Mcp.setToolApproved(approvals, searchTool, false);
+    assertEqual(approvals.length, 0, "removes exact tool approval");
+})();
+
 section("Mcp.buildToolResumeMessages");
 (function() {
     var base = [{ role: "user", content: "what changed?" }];

@@ -150,7 +150,7 @@ Item {
         onStreamCancelled: (streamId, stats) => root._applyCancelled(streamId, stats)
         mcpService: root.mcpToolCallsAllowed ? mcpServiceInstance : null
         toolCallsAllowed: root.mcpToolCallsAllowed
-        allowedToolNames: root.activeMcpAllowedTools
+        allowedToolApprovals: root.activeMcpAllowedTools
         onStreamToolRoundReady: (streamId, messages) => root._launchCurlWithMessages(messages)
     }
 
@@ -228,7 +228,7 @@ Item {
         mcpCommand = String(PluginService.loadPluginData(pluginId, "mcpCommand", "mcp-remote")).trim() || "mcp-remote";
         if (mcpCommand !== "mcp-remote")
             mcpCommand = "mcp-remote";
-        mcpAllowedTools = Mcp.normalizeToolNames(PluginService.loadPluginData(pluginId, "mcpAllowedTools", "[]"));
+        mcpAllowedTools = Mcp.normalizeToolApprovalKeys(PluginService.loadPluginData(pluginId, "mcpAllowedTools", "[]"));
         mcpAllowedToolsTrustKey = String(PluginService.loadPluginData(pluginId, "mcpAllowedToolsTrustKey", ""));
         if (isOllama && mcpEnabled && mcpUrl && mcpCommand)
             mcpServiceInstance.connectToServer();
@@ -307,12 +307,12 @@ Item {
     }
 
     function isMcpToolAllowed(toolName) {
-        return Mcp.isToolAllowed(toolName, activeMcpAllowedTools);
+        return mcpServiceInstance.isToolAllowed(toolName, activeMcpAllowedTools);
     }
 
     function setMcpToolAllowed(toolName, allowed) {
         var base = mcpAllowedToolsTrustKey === mcpTrustKey ? mcpAllowedTools : [];
-        mcpAllowedTools = Mcp.setToolAllowed(base, toolName, allowed === true);
+        mcpAllowedTools = mcpServiceInstance.setToolAllowed(base, toolName, allowed === true);
         mcpAllowedToolsTrustKey = mcpTrustKey;
         saveSettingValue("mcpAllowedTools", JSON.stringify(mcpAllowedTools));
         saveSettingValue("mcpAllowedToolsTrustKey", mcpAllowedToolsTrustKey);
@@ -328,7 +328,7 @@ Item {
     function _pruneMcpAllowedTools() {
         if (mcpAllowedToolsTrustKey !== mcpTrustKey)
             return;
-        var pruned = Mcp.pruneAllowedTools(mcpAllowedTools, mcpServiceInstance.tools);
+        var pruned = Mcp.pruneApprovedTools(mcpAllowedTools, mcpServiceInstance.tools);
         if (JSON.stringify(pruned) === JSON.stringify(mcpAllowedTools))
             return;
         mcpAllowedTools = pruned;
