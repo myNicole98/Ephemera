@@ -7,7 +7,8 @@ Rectangle {
     id: root
 
     property string toolName: ""
-    property string argumentsPreview: "{}"
+    property string toolDescription: ""
+    property string argumentsText: "{}"
 
     signal approveRequested()
     signal rejectRequested()
@@ -39,6 +40,7 @@ Rectangle {
             StyledText {
                 width: parent.width - Theme.spacingS - 18
                 text: "Approve MCP tool: " + root.toolName
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontSizeMedium
                 font.weight: Font.Medium
                 color: Theme.surfaceText
@@ -47,29 +49,45 @@ Rectangle {
             }
         }
 
+        StyledText {
+            width: parent.width
+            text: root.toolDescription
+            textFormat: Text.PlainText
+            font.pixelSize: Theme.fontSizeSmall
+            color: Theme.surfaceVariantText
+            wrapMode: Text.WordWrap
+            visible: root.toolDescription.length > 0
+        }
+
         Rectangle {
             width: parent.width
-            height: Math.min(120, Math.max(44, argumentsText.implicitHeight + Theme.spacingS * 2))
+            height: Math.min(220, Math.max(72, argumentsTextArea.implicitHeight + Theme.spacingS * 2))
             radius: Theme.cornerRadius * 0.75
             color: Theme.withAlpha(Theme.surfaceContainerHigh, 0.75)
             border.color: Theme.outlineMedium
             border.width: 1
             clip: true
 
-            TextArea {
-                id: argumentsText
+            ScrollView {
                 anchors.fill: parent
                 anchors.margins: Theme.spacingS
-                text: root.argumentsPreview
-                readOnly: true
-                selectByMouse: true
-                wrapMode: Text.Wrap
-                textFormat: Text.PlainText
-                font.pixelSize: Theme.fontSizeSmall
-                font.family: Theme.monoFontFamily
-                color: Theme.surfaceText
-                background: null
-                padding: 0
+                clip: true
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+                TextArea {
+                    id: argumentsTextArea
+                    width: parent.width
+                    text: root.argumentsText
+                    readOnly: true
+                    selectByMouse: true
+                    wrapMode: Text.Wrap
+                    textFormat: Text.PlainText
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.family: Theme.monoFontFamily
+                    color: Theme.surfaceText
+                    background: null
+                    padding: 0
+                }
             }
         }
 

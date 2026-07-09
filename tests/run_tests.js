@@ -1281,6 +1281,9 @@ section("Mcp tool argument helpers");
     assert(preview.indexOf('"query": "ephemera"') >= 0, "formats object arguments as pretty JSON");
     preview = Mcp.formatToolArguments({ query: "ephemera", body: "abcdef" }, 12);
     assert(preview.indexOf("[Arguments truncated]") >= 0, "truncates long argument previews");
+    preview = Mcp.formatToolArguments({ body: "a".repeat(32) }, 0);
+    assert(preview.indexOf("[Arguments truncated]") < 0, "limit 0 keeps full argument text");
+    assert(preview.indexOf("a".repeat(32)) >= 0, "full argument text includes complete value");
 })();
 
 section("Mcp.buildToolResumeMessages");

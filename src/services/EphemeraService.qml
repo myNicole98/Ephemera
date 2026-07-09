@@ -30,7 +30,8 @@ Item {
     property alias lastHttpStatus: streamingService.lastHttpStatus
     readonly property bool mcpToolApprovalPending: streamingService.toolApprovalPending
     readonly property string mcpPendingToolName: streamingService.pendingToolName
-    readonly property string mcpPendingToolArgumentsPreview: streamingService.pendingToolArgumentsPreview
+    readonly property string mcpPendingToolDescription: streamingService.pendingToolDescription
+    readonly property string mcpPendingToolArgumentsText: streamingService.pendingToolArgumentsText
 
     // --- Persistence (opt-in) ---
     property bool persistChat: false

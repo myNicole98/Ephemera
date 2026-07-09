@@ -34,6 +34,15 @@ Item {
     signal mcpToolsUpdated()
     signal mcpConnectionStateChanged()
 
+    // --- Lifecycle ---
+
+    Component.onDestruction: {
+        if (mcpProcess.running) {
+            _manualDisconnect = true;
+            mcpProcess.running = false;
+        }
+    }
+
     // --- Public API ---
 
     function connectToServer() {
@@ -145,6 +154,13 @@ Item {
         return Mcp.setToolApproved(current, tool, allowed === true);
     }
 
+    function toolDescription(toolName) {
+        var tool = _findTool(toolName);
+        if (!tool)
+            return "";
+        return String(tool.description || tool.title || "");
+    }
+
     // Get tools formatted for Ollama /api/chat tools array
     function getOllamaTools(approvedKeys) {
         var result = [];
@@ -223,16 +239,33 @@ Item {
         mcpConnectionStateChanged();
     }
 
+    function _writeMessage(msg) {
+        mcpProcess.write(JSON.stringify(msg) + "\n");
+    }
+
     function _sendRequest(id, req) {
-        var line = JSON.stringify(req) + "\n";
-        mcpProcess.write(line);
+        _writeMessage(req);
+    }
+
+    function _sendResponse(id, result) {
+        _writeMessage({ jsonrpc: "2.0", id: id, result: result || {} });
+    }
+
+    function _sendError(id, code, message) {
+        _writeMessage({
+            jsonrpc: "2.0",
+            id: id,
+            error: {
+                code: code,
+                message: message
+            }
+        });
     }
 
     function _sendNotification(method, params) {
         var msg = { jsonrpc: "2.0", method: method };
         if (params) msg.params = params;
-        var line = JSON.stringify(msg) + "\n";
-        mcpProcess.write(line);
+        _writeMessage(msg);
     }
 
     function _handleLine(line) {
@@ -244,6 +277,13 @@ Item {
             msg = JSON.parse(line);
         } catch (e) {
             // Not JSON — could be mcp-remote status output, ignore
+            return;
+        }
+
+        // Server request. We do not advertise optional client capabilities, so
+        // unsupported requests are rejected explicitly instead of disappearing.
+        if (msg.method && msg.id !== undefined && msg.id !== null) {
+            _handleRequest(msg.id, msg.method, msg.params);
             return;
         }
 
@@ -265,6 +305,14 @@ Item {
         if (msg.method) {
             _handleNotification(msg.method, msg.params);
         }
+    }
+
+    function _handleRequest(id, method, params) {
+        if (method === "ping") {
+            _sendResponse(id, {});
+            return;
+        }
+        _sendError(id, -32601, "Method not found: " + method);
     }
 
     function _handleNotification(method, params) {

@@ -43,17 +43,19 @@ Item {
     property var _pendingToolCallService: null
     property var _pendingApprovalToolCall: null
     property string _pendingApprovalToolName: ""
+    property string _pendingApprovalToolDescription: ""
     property var _pendingApprovalToolArgs: ({})
-    property string _pendingApprovalToolArgumentsPreview: ""
+    property string _pendingApprovalToolArgumentsText: ""
     property bool _awaitingToolExecution: false
     property int _toolRoundCount: 0
     readonly property int _maxToolRounds: 4
     readonly property int _maxToolResultChars: 20000
-    readonly property int _maxToolArgumentsPreviewChars: 4000
+    readonly property int _maxToolArgumentChars: 20000
     readonly property int _toolCallTimeoutMs: 30000
     readonly property bool toolApprovalPending: _pendingApprovalToolCall !== null
     readonly property string pendingToolName: _pendingApprovalToolName
-    readonly property string pendingToolArgumentsPreview: _pendingApprovalToolArgumentsPreview
+    readonly property string pendingToolDescription: _pendingApprovalToolDescription
+    readonly property string pendingToolArgumentsText: _pendingApprovalToolArgumentsText
     property int lastHttpStatus: 0
     property bool lastRequestFailed: false
 
@@ -289,8 +291,9 @@ Item {
     function _clearPendingToolApproval() {
         _pendingApprovalToolCall = null;
         _pendingApprovalToolName = "";
+        _pendingApprovalToolDescription = "";
         _pendingApprovalToolArgs = ({});
-        _pendingApprovalToolArgumentsPreview = "";
+        _pendingApprovalToolArgumentsText = "";
     }
 
     function handleStreamFinished(text) {
@@ -352,13 +355,19 @@ Item {
             _markError(activeStreamId, blockMessage);
             return;
         }
+        var argumentsText = Mcp.formatToolArguments(toolArgs, 0);
+        var argumentBlockMessage = _toolArgumentBlockMessage(toolName, argumentsText);
+        if (argumentBlockMessage) {
+            _markError(activeStreamId, argumentBlockMessage);
+            return;
+        }
         if (!mcpService || !mcpService.isConnected) {
             _recordToolResult(toolName, "Error: MCP service not connected");
             _executeNextToolCall();
             return;
         }
         if (requireToolApproval) {
-            _requestToolApproval(toolCall, toolName, toolArgs);
+            _requestToolApproval(toolCall, toolName, toolArgs, argumentsText);
             return;
         }
         _invokeToolCall(toolName, toolArgs);
@@ -380,11 +389,18 @@ Item {
         return "";
     }
 
-    function _requestToolApproval(toolCall, toolName, toolArgs) {
+    function _toolArgumentBlockMessage(toolName, argumentsText) {
+        if (argumentsText.length <= _maxToolArgumentChars)
+            return "";
+        return "MCP tool call blocked. The arguments for '" + toolName + "' are too large to review safely.";
+    }
+
+    function _requestToolApproval(toolCall, toolName, toolArgs, argumentsText) {
         _pendingApprovalToolCall = toolCall;
         _pendingApprovalToolName = toolName;
+        _pendingApprovalToolDescription = mcpService && mcpService.toolDescription ? mcpService.toolDescription(toolName) : "";
         _pendingApprovalToolArgs = toolArgs || {};
-        _pendingApprovalToolArgumentsPreview = Mcp.formatToolArguments(toolArgs, _maxToolArgumentsPreviewChars);
+        _pendingApprovalToolArgumentsText = argumentsText || Mcp.formatToolArguments(toolArgs, 0);
         _applyThinkingDelta(activeStreamId, "\nTool request awaiting approval: " + toolName + "\n");
     }
 
@@ -392,6 +408,11 @@ Item {
         var blockMessage = _toolPermissionBlockMessage(toolName);
         if (blockMessage) {
             _markError(activeStreamId, blockMessage);
+            return;
+        }
+        var argumentBlockMessage = _toolArgumentBlockMessage(toolName, Mcp.formatToolArguments(toolArgs, 0));
+        if (argumentBlockMessage) {
+            _markError(activeStreamId, argumentBlockMessage);
             return;
         }
         if (!mcpService || !mcpService.isConnected) {

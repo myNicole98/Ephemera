@@ -345,7 +345,8 @@ Item {
                 width: parent.width - Theme.spacingL * 2
                 visible: aiService.mcpToolApprovalPending
                 toolName: aiService.mcpPendingToolName
-                argumentsPreview: aiService.mcpPendingToolArgumentsPreview
+                toolDescription: aiService.mcpPendingToolDescription
+                argumentsText: aiService.mcpPendingToolArgumentsText
                 z: 20
                 onRejectRequested: {
                     aiService.rejectMcpToolCall();
