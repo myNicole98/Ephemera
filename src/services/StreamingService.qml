@@ -5,6 +5,7 @@ import "../lib/StreamParser.js" as StreamParser
 import "../lib/ErrorHints.js" as ErrorHints
 import "../lib/Backoff.js" as Backoff
 import "../lib/Providers.js" as Providers
+import "../lib/Mcp.js" as Mcp
 
 Item {
     id: root
@@ -34,6 +35,7 @@ Item {
     property var _toolResults: []
     property var mcpService: null
     property bool toolCallsAllowed: false
+    property var allowedToolNames: []
     property var _conversationMessages: []
     property int _pendingCallId: -1
     property var _pendingToolCallMeta: null
@@ -316,6 +318,10 @@ Item {
             _markError(activeStreamId, "MCP tool call blocked. Enable automatic tool calls in MCP settings to let the model run tools.");
             return;
         }
+        if (!Mcp.isToolAllowed(toolName, allowedToolNames)) {
+            _markError(activeStreamId, "MCP tool call blocked. The tool '" + toolName + "' is not allowed in MCP settings.");
+            return;
+        }
         if (!mcpService || !mcpService.isConnected) {
             _recordToolResult(toolName, "Error: MCP service not connected");
             _executeNextToolCall();
@@ -362,14 +368,13 @@ Item {
             return;
         }
         _toolRoundCount++;
-        var updatedMessages = _conversationMessages.slice();
-        updatedMessages.push({
-            role: "assistant",
-            content: _streamContent || "",
-            tool_calls: _allToolCalls.slice()
-        });
-        for (var i = 0; i < _toolResults.length; i++)
-            updatedMessages.push(_toolResults[i]);
+        var updatedMessages = Mcp.buildToolResumeMessages(
+            _conversationMessages,
+            _streamContent,
+            _streamThinking,
+            _allToolCalls,
+            _toolResults
+        );
         _conversationMessages = updatedMessages;
         _toolResults = [];
         _seenToolCalls = false;

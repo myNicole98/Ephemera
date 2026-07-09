@@ -50,7 +50,7 @@ Item {
             return;
         }
         if (!_validCommand(mcpCommand)) {
-            connectionError = "MCP bridge command must be a single executable path.";
+            connectionError = "MCP bridge command must be exactly mcp-remote.";
             return;
         }
         connectionError = "";
@@ -117,10 +117,12 @@ Item {
     }
 
     // Get tools formatted for Ollama /api/chat tools array
-    function getOllamaTools() {
+    function getOllamaTools(allowedNames) {
         var result = [];
         for (var i = 0; i < tools.length; i++) {
             var t = tools[i];
+            if (!Mcp.isToolAllowed(t.name, allowedNames))
+                continue;
             result.push({
                 type: "function",
                 function: {
@@ -137,7 +139,7 @@ Item {
 
     function _validCommand(command) {
         var c = String(command || "").trim();
-        return c.length > 0 && /^[A-Za-z0-9_./+-]+$/.test(c);
+        return c === "mcp-remote";
     }
 
     function _failPendingRequests(message) {

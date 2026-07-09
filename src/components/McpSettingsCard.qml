@@ -110,7 +110,7 @@ SettingsCard {
                     }
 
                     StyledText {
-                        text: "Model-selected tools run automatically for trusted MCP servers."
+                        text: "Only selected tools may run automatically for trusted MCP servers."
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.surfaceVariantText
                         wrapMode: Text.WordWrap
@@ -157,9 +157,9 @@ SettingsCard {
                 width: parent.width
                 text: aiService.mcpCommand
                 placeholderText: "mcp-remote"
+                enabled: false
                 onEditingFinished: {
-                    var command = text.trim();
-                    aiService.setMcpCommand(command);
+                    aiService.setMcpCommand("mcp-remote");
                 }
             }
 
@@ -286,7 +286,7 @@ SettingsCard {
                     spacing: Theme.spacingXS
 
                     StyledText {
-                        text: "Available Tools"
+                        text: "Allowed Tools"
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.surfaceVariantText
                     }
@@ -318,7 +318,7 @@ SettingsCard {
                                 }
 
                                 Column {
-                                    width: parent.width - 14 - parent.spacing
+                                    width: parent.width - 14 - toolAllowedToggle.width - parent.spacing * 2
                                     spacing: 2
 
                                     StyledText {
@@ -339,6 +339,14 @@ SettingsCard {
                                         width: parent.width
                                         visible: text.length > 0
                                     }
+                                }
+
+                                Switch {
+                                    id: toolAllowedToggle
+                                    checked: aiService.isMcpToolAllowed(modelData.name)
+                                    enabled: aiService.isOllama && aiService.mcpService.isConnected
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    onToggled: aiService.setMcpToolAllowed(modelData.name, checked)
                                 }
                             }
                         }

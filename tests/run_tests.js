@@ -1193,6 +1193,52 @@ section("Mcp.trustKey");
     assertEqual(Mcp.trustKey("", "mcp-remote"), "mcp-remote\n", "empty URL remains part of key");
 })();
 
+section("Mcp tool allowlist helpers");
+(function() {
+    var names = Mcp.normalizeToolNames([" search ", "search", "", null, "read_file"]);
+    assertEqual(names.length, 2, "normalizes and de-duplicates tool names");
+    assertEqual(names[0], "search", "trims tool names");
+    assertEqual(names[1], "read_file", "keeps later unique tool names");
+
+    names = Mcp.normalizeToolNames('["search","read_file"]');
+    assertEqual(names.length, 2, "parses JSON allowlist strings");
+    assertEqual(Mcp.normalizeToolNames("not json").length, 0, "invalid JSON allowlist becomes empty");
+
+    assertEqual(Mcp.isToolAllowed("search", names), true, "detects allowed tool");
+    assertEqual(Mcp.isToolAllowed("write_file", names), false, "rejects missing tool");
+    assertEqual(Mcp.isToolAllowed("", names), false, "rejects empty tool name");
+
+    names = Mcp.setToolAllowed(["search"], "read_file", true);
+    assertEqual(names.length, 2, "adds allowed tool");
+    assertEqual(Mcp.isToolAllowed("read_file", names), true, "added tool is allowed");
+    names = Mcp.setToolAllowed(names, "search", false);
+    assertEqual(Mcp.isToolAllowed("search", names), false, "removes disallowed tool");
+
+    names = Mcp.pruneAllowedTools(["search", "missing"], [{ name: "search" }, { name: "read_file" }]);
+    assertEqual(names.length, 1, "prunes unavailable allowed tools");
+    assertEqual(names[0], "search", "keeps available allowed tool");
+})();
+
+section("Mcp.buildToolResumeMessages");
+(function() {
+    var base = [{ role: "user", content: "what changed?" }];
+    var toolCalls = [{ function: { name: "search", arguments: { q: "ephemera" } } }];
+    var toolResults = [{ role: "tool", tool_name: "search", content: "result text" }];
+    var messages = Mcp.buildToolResumeMessages(base, "checking", "native thinking", toolCalls, toolResults);
+
+    assertEqual(messages.length, 3, "adds assistant tool turn and tool result");
+    assertEqual(messages[0].content, "what changed?", "keeps original messages");
+    assertEqual(messages[1].role, "assistant", "adds assistant tool-call message");
+    assertEqual(messages[1].content, "checking", "keeps assistant content");
+    assertEqual(messages[1].thinking, "native thinking", "preserves Ollama native thinking");
+    assertEqual(messages[1].tool_calls.length, 1, "keeps tool calls");
+    assertEqual(messages[2].role, "tool", "appends tool result");
+
+    messages = Mcp.buildToolResumeMessages(base, "", "", toolCalls, toolResults);
+    assertEqual(messages[1].thinking, undefined, "omits empty thinking field");
+    assertEqual(base.length, 1, "does not mutate original conversation array");
+})();
+
 section("Mcp.appendToolsPage");
 (function() {
     var page = Mcp.appendToolsPage([{ name: "first" }], {
