@@ -75,6 +75,7 @@ var StreamParser = loadPragmaLib("src/lib/StreamParser.js");
 var Providers = loadPragmaLib("src/lib/Providers.js");
 var Markdown = loadPragmaLib("src/lib/Markdown.js");
 var ChatExport = loadPragmaLib("src/lib/ChatExport.js");
+var Mcp = loadPragmaLib("src/lib/Mcp.js");
 var VariantStore = loadPragmaLib("src/lib/VariantStore.js");
 var ErrorHints = loadPragmaLib("src/lib/ErrorHints.js");
 
@@ -423,6 +424,15 @@ section("StreamParser.parseDelta — Ollama native /api/chat");
     });
     r = StreamParser.parseDelta(json, "ollama");
     assertEqual(r.thinking, "native thought", "extracts Ollama native thinking");
+
+    json = JSON.stringify({
+        model: "gemma4",
+        message: { role: "assistant", thinking: "thinking without content" },
+        done: false
+    });
+    r = StreamParser.parseDelta(json, "ollama");
+    assertEqual(r.content, "", "missing native content defaults to empty string");
+    assertEqual(r.thinking, "thinking without content", "extracts thinking when content is omitted");
 
     // Tool call chunk (MCP tool)
     json = JSON.stringify({
@@ -1171,6 +1181,53 @@ section("ChatExport.generateFilename");
 
     f = ChatExport.generateFilename(null);
     assert(f.indexOf("ephemera-chat-") >= 0, "null home dir handled");
+})();
+
+// ═════════════════════════════════════════════════════════════════
+// Mcp.js tests
+// ═════════════════════════════════════════════════════════════════
+
+section("Mcp.trustKey");
+(function() {
+    assertEqual(Mcp.trustKey(" http://localhost:8811/sse ", " mcp-remote "), "mcp-remote\nhttp://localhost:8811/sse", "trims URL and command");
+    assertEqual(Mcp.trustKey("", "mcp-remote"), "mcp-remote\n", "empty URL remains part of key");
+})();
+
+section("Mcp.appendToolsPage");
+(function() {
+    var page = Mcp.appendToolsPage([{ name: "first" }], {
+        tools: [{ name: "second" }],
+        nextCursor: "cursor-2"
+    });
+    assertEqual(page.tools.length, 2, "appends tool page");
+    assertEqual(page.tools[1].name, "second", "keeps appended tool");
+    assertEqual(page.nextCursor, "cursor-2", "returns next cursor");
+
+    page = Mcp.appendToolsPage(page.tools, { tools: [{ name: "third" }] });
+    assertEqual(page.tools.length, 3, "appends final page");
+    assertEqual(page.nextCursor, "", "missing cursor becomes empty string");
+})();
+
+section("Mcp.formatToolResult");
+(function() {
+    var text = Mcp.formatToolResult({
+        content: [
+            { type: "text", text: "hello" },
+            { type: "image", mimeType: "image/png" },
+            { type: "resource_link", name: "doc", uri: "file:///doc.md" }
+        ],
+        structuredContent: { count: 2 }
+    });
+    assert(text.indexOf("hello") >= 0, "includes text content");
+    assert(text.indexOf("[image: image/png]") >= 0, "summarizes image content");
+    assert(text.indexOf("[resource: doc]") >= 0, "summarizes resource links");
+    assert(text.indexOf('"count":2') >= 0, "includes structured content");
+
+    text = Mcp.formatToolResult({ content: [{ type: "resource", resource: { text: "embedded text" } }] });
+    assertEqual(text, "embedded text", "uses embedded resource text");
+    assertEqual(Mcp.formatToolResult("plain"), "plain", "passes strings through");
+    assertEqual(Mcp.isToolError({ isError: true }), true, "detects MCP tool errors");
+    assertEqual(Mcp.isToolError({ isError: false }), false, "non-error result is not an error");
 })();
 
 // ═════════════════════════════════════════════════════════════════

@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import "../lib/Mcp.js" as Mcp
 import "../lib/Providers.js" as Providers
 
 Item {
@@ -91,12 +92,16 @@ Item {
             return -1;
         var id = _nextId++;
         _pendingRequests[id] = {
-                resolve: function(result) {
-                    root.toolCallCompleted(id, typeof result === "string" ? result : JSON.stringify(result));
-                },
-                reject: function(err) {
-                    root.toolCallFailed(id, err);
-                }
+            resolve: function(result) {
+                var text = Mcp.formatToolResult(result);
+                if (Mcp.isToolError(result))
+                    root.toolCallFailed(id, text || "MCP tool reported an error.");
+                else
+                    root.toolCallCompleted(id, text);
+            },
+            reject: function(err) {
+                root.toolCallFailed(id, err);
+            }
         };
         var req = {
             jsonrpc: "2.0",
@@ -238,12 +243,17 @@ Item {
         _listTools();
     }
 
-    function _listTools() {
+    function _listTools(cursor, accumulated) {
         var id = _nextId++;
+        var collected = Array.isArray(accumulated) ? accumulated.slice() : [];
         _pendingRequests[id] = {
             resolve: function(result) {
-                var toolList = (result && result.tools) ? result.tools : [];
-                tools = toolList;
+                var page = Mcp.appendToolsPage(collected, result);
+                if (page.nextCursor) {
+                    _listTools(page.nextCursor, page.tools);
+                    return;
+                }
+                tools = page.tools;
                 isConnected = true;
                 connecting = false;
                 connectionError = "";
@@ -262,7 +272,7 @@ Item {
             jsonrpc: "2.0",
             id: id,
             method: "tools/list",
-            params: {}
+            params: cursor ? { cursor: cursor } : {}
         });
     }
 

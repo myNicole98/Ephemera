@@ -120,12 +120,11 @@ SettingsCard {
 
                 Switch {
                     id: autoExecuteToggle
-                    checked: aiService.mcpAutoExecuteTools
+                    checked: aiService.mcpToolCallsAllowed
                     enabled: aiService.isOllama
                     anchors.verticalCenter: parent.verticalCenter
                     onToggled: {
-                        aiService.mcpAutoExecuteTools = checked;
-                        aiService.saveSettingValue("mcpAutoExecuteTools", checked);
+                        aiService.setMcpAutoExecuteTools(checked);
                     }
                 }
             }
@@ -143,9 +142,7 @@ SettingsCard {
                 placeholderText: "http://192.168.1.107:8811/sse"
                 onEditingFinished: {
                     var url = text.trim();
-                    aiService.mcpUrl = url;
-                    aiService.saveSettingValue("mcpUrl", url);
-                    aiService.mcpService.mcpUrl = url;
+                    aiService.setMcpUrl(url);
                 }
             }
 
@@ -162,9 +159,7 @@ SettingsCard {
                 placeholderText: "mcp-remote"
                 onEditingFinished: {
                     var command = text.trim();
-                    aiService.mcpCommand = command;
-                    aiService.saveSettingValue("mcpCommand", command);
-                    aiService.mcpService.mcpCommand = command;
+                    aiService.setMcpCommand(command);
                 }
             }
 

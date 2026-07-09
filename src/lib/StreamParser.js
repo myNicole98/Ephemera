@@ -91,8 +91,8 @@ function parseDelta(jsonText, provider) {
                     result.outputTokens = meta.candidatesTokenCount;
             }
         } else if (provider === "ollama") {
-            if (data.message && typeof data.message.content === "string") {
-                result.content = data.message.content;
+            if (data.message) {
+                result.content = typeof data.message.content === "string" ? data.message.content : "";
                 result.thinking = data.message.thinking || "";
                 if (Array.isArray(data.message.tool_calls) && data.message.tool_calls.length > 0)
                     result.toolCalls = data.message.tool_calls;

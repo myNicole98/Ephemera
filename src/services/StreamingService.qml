@@ -244,14 +244,14 @@ Item {
         return text.substring(0, _maxToolResultChars) + "\n\n[Tool result truncated]";
     }
 
-    function _toolCallId(toolCall, fallbackName) {
-        return toolCall.id || fallbackName || ("call_" + _pendingCallId);
+    function _toolCallName(toolCall, fallbackName) {
+        return fallbackName || toolCall.name || "unknown_tool";
     }
 
-    function _recordToolResult(toolCallId, content) {
+    function _recordToolResult(toolName, content) {
         _toolResults.push({
             role: "tool",
-            tool_call_id: toolCallId,
+            tool_name: toolName,
             content: _truncateToolResult(content)
         });
     }
@@ -311,25 +311,25 @@ Item {
         if (typeof toolArgs === "string") {
             try { toolArgs = JSON.parse(toolArgs); } catch(e) { toolArgs = {}; }
         }
+        toolName = _toolCallName(toolCall, toolName);
         if (!toolCallsAllowed) {
             _markError(activeStreamId, "MCP tool call blocked. Enable automatic tool calls in MCP settings to let the model run tools.");
             return;
         }
         if (!mcpService || !mcpService.isConnected) {
-            _recordToolResult(_toolCallId(toolCall, toolName), "Error: MCP service not connected");
+            _recordToolResult(toolName, "Error: MCP service not connected");
             _executeNextToolCall();
             return;
         }
         _applyThinkingDelta(activeStreamId, "\nCalling tool: " + toolName + "\n");
-        var toolCallId = _toolCallId(toolCall, toolName);
         var callId = mcpService.callTool(toolName, toolArgs);
         if (callId < 0) {
-            _recordToolResult(toolCallId, "Error: MCP service not connected");
+            _recordToolResult(toolName, "Error: MCP service not connected");
             _executeNextToolCall();
             return;
         }
         _pendingCallId = callId;
-        _pendingToolCallMeta = { id: toolCallId, name: toolName };
+        _pendingToolCallMeta = { name: toolName };
         toolCallTimer.restart();
     }
 
@@ -340,7 +340,7 @@ Item {
         var resultText = (typeof result === "string") ? result : JSON.stringify(result);
         var preview = resultText.substring(0, 200) + (resultText.length > 200 ? "..." : "");
         _applyThinkingDelta(activeStreamId, "Tool result: " + preview + "\n");
-        _recordToolResult(_pendingToolCallMeta.id, resultText);
+        _recordToolResult(_pendingToolCallMeta.name, resultText);
         _pendingToolCallMeta = null;
         _executeNextToolCall();
     }
@@ -350,7 +350,7 @@ Item {
         toolCallTimer.stop();
         _pendingCallId = -1;
         _applyThinkingDelta(activeStreamId, "Tool error: " + error + "\n");
-        _recordToolResult(_pendingToolCallMeta ? _pendingToolCallMeta.id : String(callId), "Error: " + error);
+        _recordToolResult(_pendingToolCallMeta ? _pendingToolCallMeta.name : "unknown_tool", "Error: " + error);
         _pendingToolCallMeta = null;
         _executeNextToolCall();
     }
