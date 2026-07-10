@@ -1,5 +1,55 @@
 # Changelog
 
+## [2.0.0](https://github.com/myNicole98/Ephemera/compare/v1.1.0...v2.0.0) (2026-07-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* **core:** Backoff.isInCooldown() signature changed from (lastErrorTime, consecutiveErrors, baseDelayMs, maxDelayMs) to a single cooldownUntil timestamp. Use computeCooldownUntil() at error time.
+
+### Features
+
+* **core:** ✨ add unlimited tokens mode and improve chat UX ([e14112a](https://github.com/myNicole98/Ephemera/commit/e14112af63d8ac4123ac7d4094b524a9bd13bb46))
+* **core:** ✨ resolve 18 audit findings and stabilize for v1.0 ([dde2869](https://github.com/myNicole98/Ephemera/commit/dde2869f00bd0814888d5d175996464446da3582))
+* **mcp:** 🔒 require explicit opt-in before MCP tools auto-execute ([7501254](https://github.com/myNicole98/Ephemera/commit/7501254c61f918be5830297b303f527027d6c353))
+* **ollama:** ✨ add configurable thinking mode for Ollama provider ([17c1661](https://github.com/myNicole98/Ephemera/commit/17c166148bae165ea941a40e26ae4d31b2ddcdd3))
+* **security:** 🔒 add system keyring integration and harden curl requests ([85fd6a5](https://github.com/myNicole98/Ephemera/commit/85fd6a553d784ef0bc4760a3864035880a07c592))
+* **streaming:** ✨ add API-reported token counts for accurate tok/s stats ([3880c59](https://github.com/myNicole98/Ephemera/commit/3880c59980826139bc21b5233839bc72608bc9f5))
+* **ui:** ✨ add hardcoded model lists for provider dropdowns ([024e2e6](https://github.com/myNicole98/Ephemera/commit/024e2e6ac82e72ae097bec368e7c8ee2e17511cb))
+* **ui:** ✨ add streaming stats, model selector polish, and ollama boot banner ([e5f75af](https://github.com/myNicole98/Ephemera/commit/e5f75af0f2e06a6cd836942ed415ae37aa8a8040))
+
+
+### Bug Fixes
+
+* **core:** 🐛 resolve critical bugs and expand test coverage ([670b81a](https://github.com/myNicole98/Ephemera/commit/670b81a1d6d36a16d1f30c8226ffec4b83060220))
+* **core:** 🐛🔒✨ resolve critical bugs, harden security, and add temperature clamping ([bc3e82c](https://github.com/myNicole98/Ephemera/commit/bc3e82cd180207edbe793a441641f9139cf97002))
+* harden MCP integration and panel switching ([89486e1](https://github.com/myNicole98/Ephemera/commit/89486e10fbea3d1de03fd2d5b9cc4081461f5e35))
+* keep header tooltips available ([1d23ed7](https://github.com/myNicole98/Ephemera/commit/1d23ed7f1f04703378d79b94fa44ef0ff4bedf45))
+* **keyring:** 🐛 use onStreamFinished for keyring lookup output ([f998731](https://github.com/myNicole98/Ephemera/commit/f998731e8387716494d1fd3d2e154bab5f9bd3bd))
+* **markdown:** 🐛 restore inline code after protected blocks ([d726cc8](https://github.com/myNicole98/Ephemera/commit/d726cc80a8cb73ced8ab367d3f6ccba433635c0b))
+* **mcp:** close execution boundary gaps ([e6c6d2b](https://github.com/myNicole98/Ephemera/commit/e6c6d2b2d1bd9bd646ce85828cdb07135e07f721))
+* **mcp:** harden tool approval review ([444bda2](https://github.com/myNicole98/Ephemera/commit/444bda2afdda0b7cb2c34aa8714997da0933e095))
+* **mcp:** harden tool approvals ([984c66d](https://github.com/myNicole98/Ephemera/commit/984c66d95b896513db05f1f41f87b81b6efde098))
+* **mcp:** harden tool execution boundaries ([d69f7d2](https://github.com/myNicole98/Ephemera/commit/d69f7d28116c08b2b7f45cea23e49bde58e60ec5))
+* **mcp:** harden tool execution flow ([1d46afd](https://github.com/myNicole98/Ephemera/commit/1d46afd660db9bff1b3e90de8a45666360fb0d23))
+* **mcp:** require per-tool allowlist ([a832e5a](https://github.com/myNicole98/Ephemera/commit/a832e5af4cfee883f276580ec67652736905859c))
+* **mcp:** require tool call approval ([ddaee63](https://github.com/myNicole98/Ephemera/commit/ddaee638d15b3664c4b121e12ea040d7f8ad3e88))
+* **readme:** 🐛 use query param badge URL to prevent 404 after version bump ([05718bf](https://github.com/myNicole98/Ephemera/commit/05718bfe7c4ebfe4398fd222815202272dbbef7c))
+* **settings:** 🐛 fix custom system prompt not syncing to service ([bafe2b0](https://github.com/myNicole98/Ephemera/commit/bafe2b0b35d91222f3a3ed15c5cda6c45fa76675))
+
+
+### Refactoring
+
+* ♻️ restructure project into src/ directory hierarchy ([9fd5436](https://github.com/myNicole98/Ephemera/commit/9fd54365b7fb5175e52631d5208a407fe78d33c7))
+* **core:** ♻️ decompose monoliths into coordinator pattern with child services ([bc3122d](https://github.com/myNicole98/Ephemera/commit/bc3122dd8ea93055be96f4ecb13d9e3219a0346c))
+* **core:** ♻️ decompose settings, extract JS modules, fix bugs, add chat features ([bad75c0](https://github.com/myNicole98/Ephemera/commit/bad75c0216fae41717e3374ef39d03a35ef2359b))
+
+
+### Documentation
+
+* 📝 condense AGENTS.md and trim README ([169092c](https://github.com/myNicole98/Ephemera/commit/169092c05c4ffeb119591bcbdef6a21c67ce13c9))
+* add badges to README and create .gitignore ([987d8d7](https://github.com/myNicole98/Ephemera/commit/987d8d761bd3a687803f256fb6d0870c11e03203))
+
 ## [1.1.0](https://github.com/nicolasgarcia214/Ephemera/compare/v1.0.1...v1.1.0) (2026-05-01)
 
 
