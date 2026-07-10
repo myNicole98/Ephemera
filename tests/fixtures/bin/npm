@@ -1,13 +1,14 @@
 #!/bin/sh
 set -eu
 
-if [ "$#" -ne 6 ] || [ "$1" != "list" ] || [ "$2" != "--global" ] \
+if [ "$#" -ne 7 ] || [ "$1" != "list" ] || [ "$2" != "--global" ] \
         || [ "$3" != "--json" ] || [ "$4" != "--long" ] \
-        || [ "$5" != "--depth=0" ] || [ "$6" != "mcp-remote" ]; then
+        || [ "$5" != "--depth=1" ] || [ "$6" != "mcp-remote" ] \
+        || [ "$7" != "undici" ]; then
     printf 'unexpected npm invocation\n' >&2
     exit 2
 fi
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PACKAGE_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../mcp-remote-package" && pwd)
-printf '{"dependencies":{"mcp-remote":{"version":"0.1.38","path":"%s","bin":{"mcp-remote":"dist/proxy.js"}}}}\n' "$PACKAGE_DIR"
+printf '{"dependencies":{"mcp-remote":{"version":"0.1.38","path":"%s","bin":{"mcp-remote":"dist/proxy.js"},"dependencies":{"undici":{"version":"7.28.0"}}}}}\n' "$PACKAGE_DIR"

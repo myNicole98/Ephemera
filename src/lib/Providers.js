@@ -10,8 +10,8 @@
  * Validate a URL for use as a provider base URL.
  *
  * Enforces: http(s) scheme only, valid hostname, max 2048 chars, no control
- * characters or characters unsafe in URLs (angle brackets, quotes, backticks,
- * curly braces, pipes, backslashes, spaces).
+ * characters, default-ignorable formatting code points, or characters unsafe in URLs
+ * (angle brackets, quotes, backticks, curly braces, pipes, backslashes, spaces).
  *
  * @param {string} url - URL to validate.
  * @returns {{ valid: boolean, error: string }} error is empty when valid or when URL is absent.
@@ -26,9 +26,54 @@ function validateUrl(url) {
     if (!/^https?:\/\/[a-zA-Z0-9]/.test(u))
         return { valid: false, error: "Invalid hostname in URL." };
     // Reject control characters and characters unsafe in URLs (prevents injection via path)
-    if (/[\x00-\x20\x7f<>"'{}|\\^`]/.test(u))
+    if (/[\x00-\x20\x7f-\x9f<>"'{}|\\^`]/.test(u))
         return { valid: false, error: "URL contains invalid characters." };
+    if (_containsUnsafeUnicodeFormatting(u))
+        return { valid: false, error: "URL contains invisible or directional control characters." };
     return { valid: true, error: "" };
+}
+
+// Unicode 17 Default_Ignorable_Code_Point ranges, plus line separators,
+// interlinear annotation controls, and unpaired surrogates that can change
+// when a JavaScript string is encoded for process argv.
+function _isUnsafeFormattingCodePoint(codePoint) {
+    return codePoint === 0x00ad || codePoint === 0x034f || codePoint === 0x061c
+        || (codePoint >= 0x115f && codePoint <= 0x1160)
+        || (codePoint >= 0x17b4 && codePoint <= 0x17b5)
+        || (codePoint >= 0x180b && codePoint <= 0x180f)
+        || (codePoint >= 0x200b && codePoint <= 0x200f)
+        || (codePoint >= 0x2028 && codePoint <= 0x202e)
+        || (codePoint >= 0x2060 && codePoint <= 0x206f)
+        || codePoint === 0x3164
+        || (codePoint >= 0xfe00 && codePoint <= 0xfe0f)
+        || codePoint === 0xfeff || codePoint === 0xffa0
+        || (codePoint >= 0xfff0 && codePoint <= 0xfffb)
+        || (codePoint >= 0x1bca0 && codePoint <= 0x1bca3)
+        || (codePoint >= 0x1d173 && codePoint <= 0x1d17a)
+        || (codePoint >= 0xe0000 && codePoint <= 0xe0fff);
+}
+
+function _containsUnsafeUnicodeFormatting(value) {
+    var text = String(value || "");
+    for (var i = 0; i < text.length; i++) {
+        var first = text.charCodeAt(i);
+        if (first >= 0xd800 && first <= 0xdbff) {
+            if (i + 1 >= text.length)
+                return true;
+            var second = text.charCodeAt(i + 1);
+            if (second < 0xdc00 || second > 0xdfff)
+                return true;
+            var codePoint = 0x10000 + ((first - 0xd800) * 0x400)
+                + (second - 0xdc00);
+            if (_isUnsafeFormattingCodePoint(codePoint))
+                return true;
+            i++;
+        } else if ((first >= 0xdc00 && first <= 0xdfff)
+                || _isUnsafeFormattingCodePoint(first)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 function normalizeBaseUrl(url) {

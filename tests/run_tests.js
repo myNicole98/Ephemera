@@ -76,7 +76,7 @@ var Providers = loadPragmaLib("src/lib/Providers.js");
 var Markdown = loadPragmaLib("src/lib/Markdown.js");
 var ChatExport = loadPragmaLib("src/lib/ChatExport.js");
 var Mcp = loadPragmaLib("src/lib/Mcp.js");
-var McpResult = loadPragmaLib("src/lib/McpResult.js");
+var McpSchema = loadPragmaLib("src/lib/McpSchema.js");
 var VariantStore = loadPragmaLib("src/lib/VariantStore.js");
 var ErrorHints = loadPragmaLib("src/lib/ErrorHints.js");
 
@@ -1220,8 +1220,24 @@ section("Mcp bridge version helpers");
     assertEqual(Mcp.isVersionInRange("0.1.38", "0.1.38", "0.1.39"), true, "accepts the reviewed bridge release");
     assertEqual(Mcp.isVersionInRange("0.1.37", "0.1.38", "0.1.39"), false, "rejects an older unreviewed bridge release");
     assertEqual(Mcp.isVersionInRange("0.1.39", "0.1.38", "0.1.39"), false, "rejects a future unreviewed bridge release");
+    assertEqual(Mcp.isVersionInRange("7.27.0", "7.28.0", "8.0.0"), false, "rejects a vulnerable Undici 7 release");
+    assertEqual(Mcp.isVersionInRange("7.28.0", "7.28.0", "8.0.0"), true, "accepts the patched Undici 7 floor");
+    assertEqual(Mcp.isVersionInRange("8.0.0", "7.28.0", "8.0.0"), false, "rejects an unreviewed Undici major release");
 
     var npmOutput = JSON.stringify({
+        dependencies: {
+            "mcp-remote": {
+                version: "0.1.38",
+                path: "/opt/npm/lib/node_modules/mcp-remote",
+                bin: { "mcp-remote": "dist/proxy.js" },
+                dependencies: { undici: { version: "7.28.0" } }
+            }
+        }
+    });
+    assertEqual(Mcp.extractNpmPackageVersion(npmOutput, "mcp-remote"), "0.1.38", "extracts the installed npm version");
+    assertEqual(Mcp.extractNpmPackageInfo(npmOutput, "mcp-remote").executable, "/opt/npm/lib/node_modules/mcp-remote/dist/proxy.js", "extracts the checked executable path");
+    assertEqual(Mcp.extractNpmPackageInfo(npmOutput, "mcp-remote").undiciVersion, "7.28.0", "extracts the direct Undici runtime version");
+    var missingRuntimeDependency = JSON.stringify({
         dependencies: {
             "mcp-remote": {
                 version: "0.1.38",
@@ -1230,8 +1246,8 @@ section("Mcp bridge version helpers");
             }
         }
     });
-    assertEqual(Mcp.extractNpmPackageVersion(npmOutput, "mcp-remote"), "0.1.38", "extracts the installed npm version");
-    assertEqual(Mcp.extractNpmPackageInfo(npmOutput, "mcp-remote").executable, "/opt/npm/lib/node_modules/mcp-remote/dist/proxy.js", "extracts the checked executable path");
+    assertEqual(Mcp.extractNpmPackageInfo(missingRuntimeDependency, "mcp-remote").undiciVersion,
+        "", "fails closed when the Undici runtime dependency is absent");
     var shadowed = JSON.stringify({ dependencies: { "mcp-remote": { version: "0.1.38", path: "/tmp/package", bin: { "mcp-remote": "../shadow" } } } });
     assertEqual(Mcp.extractNpmPackageInfo(shadowed, "mcp-remote").executable, "", "rejects an unexpected package executable layout");
     assertEqual(Mcp.extractNpmPackageVersion("not json", "mcp-remote"), "", "rejects malformed npm output");
@@ -1359,8 +1375,31 @@ section("Mcp tool argument helpers");
     assert(preview.indexOf("a".repeat(32)) >= 0, "full argument text includes complete value");
     preview = Mcp.formatToolArguments({ path: "safe\u202eevil" }, 0);
     assert(preview.indexOf("\\u202e") >= 0, "escapes bidirectional controls in approval text");
+    preview = Mcp.formatToolArguments({ path: "\u202e" + "x".repeat(40) }, 20);
+    assert(preview.indexOf("\u202e") < 0 && preview.indexOf("\\u202e") >= 0,
+        "escapes bidirectional controls in truncated previews");
     assert(Mcp.formatReviewText("safe\u200bevil").indexOf("\\u200b") >= 0,
         "escapes invisible controls in server descriptions");
+    assert(Mcp.formatReviewText("safe\u2060evil").indexOf("\\u2060") >= 0,
+        "escapes word-joining controls in review text");
+    assert(Mcp.formatReviewText("safe\u00adevil").indexOf("\\u00ad") >= 0,
+        "escapes soft hyphens in review text");
+    var defaultIgnorableSamples = [
+        { value: "\u3164", escaped: "\\u3164", label: "Hangul filler" },
+        { value: "\uffa0", escaped: "\\uffa0", label: "halfwidth Hangul filler" },
+        { value: "\ufe0f", escaped: "\\ufe0f", label: "BMP variation selector" },
+        { value: "\ud834\udd73", escaped: "\\u{1d173}", label: "musical formatting control" },
+        { value: "\udb40\udc01", escaped: "\\u{e0001}", label: "language tag" },
+        { value: "\udb40\udd00", escaped: "\\u{e0100}", label: "supplementary variation selector" },
+        { value: "\ud800", escaped: "\\ud800", label: "unpaired surrogate" }
+    ];
+    for (var di = 0; di < defaultIgnorableSamples.length; di++) {
+        var sample = defaultIgnorableSamples[di];
+        var safeReview = Mcp.formatReviewText("before" + sample.value + "after");
+        assert(safeReview.indexOf(sample.value) < 0
+                && safeReview.indexOf(sample.escaped) >= 0,
+            "escapes " + sample.label + " in review text");
+    }
 })();
 
 section("Mcp.buildToolResumeMessages");
@@ -1420,7 +1459,57 @@ section("Mcp.formatToolResult");
     assertEqual(Mcp.isToolError({ isError: false }), false, "non-error result is not an error");
 })();
 
-section("McpResult.validateToolResult");
+section("McpSchema.validateToolArguments");
+(function() {
+    var tool = {
+        name: "write_record",
+        inputSchema: {
+            type: "object",
+            properties: {
+                name: { type: "string", minLength: 1, maxLength: 20 },
+                count: { type: "integer", minimum: 1, maximum: 5 },
+                tags: { type: "array", maxItems: 2, items: { type: "string" } }
+            },
+            required: ["name", "count"],
+            additionalProperties: false
+        }
+    };
+    assertEqual(McpSchema.inputSchemaSupportError(tool.inputSchema), "",
+        "accepts a bounded input schema");
+    assertEqual(McpSchema.validateToolArguments(tool, {
+        name: "ephemera", count: 2, tags: ["qml"]
+    }).valid, true, "accepts arguments matching the approved input schema");
+    assertEqual(McpSchema.validateToolArguments(tool, {
+        name: "ephemera", count: "2"
+    }).valid, false, "rejects an argument with the wrong type");
+    assertEqual(McpSchema.validateToolArguments(tool, {
+        name: "ephemera", count: 2, hidden: true
+    }).valid, false, "rejects undeclared arguments when additional properties are forbidden");
+    assertEqual(McpSchema.validateToolArguments(tool, {
+        name: "ephemera"
+    }).valid, false, "rejects missing required arguments");
+    assertEqual(McpSchema.validateToolArguments(tool, {
+        name: "ephemera", count: 6
+    }).valid, false, "rejects arguments outside numeric bounds");
+    var permissiveTool = { name: "permissive", inputSchema: { type: "object" } };
+    var cyclicArguments = {};
+    cyclicArguments.self = cyclicArguments;
+    assertEqual(McpSchema.validateToolArguments(permissiveTool, cyclicArguments).valid,
+        false, "rejects cyclic arguments before serialization");
+    assertEqual(McpSchema.validateToolArguments(permissiveTool, { value: NaN }).valid,
+        false, "rejects non-JSON numeric arguments");
+    assertEqual(McpSchema.validateToolArguments(permissiveTool, { value: undefined }).valid,
+        false, "rejects values that JSON serialization would omit");
+    assertEqual(McpSchema.validateToolArguments(permissiveTool, {
+        value: { toJSON: function() { return "different"; } }
+    }).valid, false, "rejects arguments whose JSON representation differs from review");
+    assert(McpSchema.inputSchemaSupportError({
+        type: "object",
+        properties: { value: { "$ref": "https://attacker.example/input.json" } }
+    }).length > 0, "rejects unresolved input schema references before tool exposure");
+})();
+
+section("McpSchema.validateToolResult");
 (function() {
     var tool = {
         name: "lookup",
@@ -1435,27 +1524,27 @@ section("McpResult.validateToolResult");
             additionalProperties: false
         }
     };
-    var valid = McpResult.validateToolResult(tool, {
+    var valid = McpSchema.validateToolResult(tool, {
         content: [{ type: "text", text: "two" }],
         structuredContent: { count: 2, labels: ["a", "b"] }
     });
     assertEqual(valid.valid, true, "accepts structured output matching the advertised schema");
-    assertEqual(McpResult.validateToolResult(tool, {
+    assertEqual(McpSchema.validateToolResult(tool, {
         content: [{ type: "text", text: "bad" }],
         structuredContent: { count: "two" }
     }).valid, false, "rejects structured output with the wrong type");
-    assertEqual(McpResult.validateToolResult(tool, {
+    assertEqual(McpSchema.validateToolResult(tool, {
         content: [{ type: "text", text: "missing" }]
     }).valid, false, "rejects missing advertised structured output");
-    assertEqual(McpResult.validateToolResult({ name: "plain" }, {}).valid, false, "rejects a result without the required content array");
-    assertEqual(McpResult.validateToolResult({ name: "plain" }, {
+    assertEqual(McpSchema.validateToolResult({ name: "plain" }, {}).valid, false, "rejects a result without the required content array");
+    assertEqual(McpSchema.validateToolResult({ name: "plain" }, {
         content: [],
         structuredContent: ["not", "an", "object"]
     }).valid, false, "rejects non-object structured output");
-    assertEqual(McpResult.validateToolResult({ name: "plain" }, {
+    assertEqual(McpSchema.validateToolResult({ name: "plain" }, {
         content: new Array(1025).fill({ type: "text", text: "" })
     }).valid, false, "rejects an excessive number of result content items");
-    assertEqual(McpResult.validateToolResult(tool, {
+    assertEqual(McpSchema.validateToolResult(tool, {
         content: [{ type: "script", text: "bad" }],
         structuredContent: { count: 1 }
     }).valid, false, "rejects unsupported MCP content types");
@@ -1464,7 +1553,7 @@ section("McpResult.validateToolResult");
         inputSchema: { type: "object" },
         outputSchema: { "$ref": "https://attacker.example/schema.json" }
     };
-    assertEqual(McpResult.validateToolResult(referencedTool, {
+    assertEqual(McpSchema.validateToolResult(referencedTool, {
         content: [],
         structuredContent: { count: 1 }
     }).valid, false, "fails closed on unresolved output schema references");
@@ -1478,17 +1567,17 @@ section("McpResult.validateToolResult");
             }
         }
     };
-    assert(McpResult.outputSchemaSupportError(nestedReferenceTool.outputSchema).length > 0,
+    assert(McpSchema.outputSchemaSupportError(nestedReferenceTool.outputSchema).length > 0,
         "rejects unsupported schema references even when the property is absent");
-    assertEqual(McpResult.validateToolResult(nestedReferenceTool, {
+    assertEqual(McpSchema.validateToolResult(nestedReferenceTool, {
         content: [],
         structuredContent: {}
     }).valid, false, "fails closed on an unvisited nested schema reference");
-    assert(McpResult.outputSchemaSupportError({
+    assert(McpSchema.outputSchemaSupportError({
         type: "object",
         properties: { value: { enum: [{ nested: true }] } }
     }).length > 0, "rejects complex enum values that cannot be compared within a fixed budget");
-    assertEqual(McpResult.validateToolResult(tool, {
+    assertEqual(McpSchema.validateToolResult(tool, {
         isError: true,
         content: [{ type: "text", text: "failed" }]
     }).valid, true, "allows a well-formed error result without structured output");
@@ -1670,6 +1759,33 @@ section("Providers.validateUrl");
 
     r = Providers.validateUrl("http://example.com/path\\backslash");
     assert(!r.valid, "rejects backslash in URL");
+
+    r = Providers.validateUrl("https://example.com/safe\u202eevil");
+    assert(!r.valid, "rejects bidirectional controls in URL paths");
+
+    r = Providers.validateUrl("https://example.com/safe\u200bevil");
+    assert(!r.valid, "rejects invisible controls in URL paths");
+
+    r = Providers.validateUrl("https://example.com/safe\u2028evil");
+    assert(!r.valid, "rejects Unicode line separators in URL paths");
+
+    r = Providers.validateUrl("https://example.com/safe\u0085evil");
+    assert(!r.valid, "rejects C1 controls in URL paths");
+
+    var invisibleUrlCodePoints = [
+        { value: "\u3164", label: "Hangul filler" },
+        { value: "\uffa0", label: "halfwidth Hangul filler" },
+        { value: "\ufe0f", label: "BMP variation selector" },
+        { value: "\ud834\udd73", label: "musical formatting control" },
+        { value: "\udb40\udc01", label: "language tag" },
+        { value: "\udb40\udd00", label: "supplementary variation selector" },
+        { value: "\ud800", label: "unpaired surrogate" }
+    ];
+    for (var ui = 0; ui < invisibleUrlCodePoints.length; ui++) {
+        var unsafeUrl = invisibleUrlCodePoints[ui];
+        r = Providers.validateUrl("https://example.com/before" + unsafeUrl.value + "after");
+        assert(!r.valid, "rejects " + unsafeUrl.label + " in URL paths");
+    }
 
     r = Providers.validateUrl("http://example.com/ok-path_name.ext/v2");
     assert(r.valid, "allows safe path characters (hyphens, underscores, dots)");

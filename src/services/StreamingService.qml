@@ -6,6 +6,7 @@ import "../lib/ErrorHints.js" as ErrorHints
 import "../lib/Backoff.js" as Backoff
 import "../lib/Providers.js" as Providers
 import "../lib/Mcp.js" as Mcp
+import "../lib/McpSchema.js" as McpSchema
 
 Item {
     id: root
@@ -367,25 +368,12 @@ Item {
             _markError(activeStreamId, blockMessage);
             return;
         }
-        var rawArgumentsText = Mcp.formatToolArguments(rawToolArgs, 0);
-        var argumentBlockMessage = _toolArgumentBlockMessage(toolName, rawArgumentsText);
-        if (argumentBlockMessage) {
-            _markError(activeStreamId, argumentBlockMessage);
+        var validation = _validateToolArguments(toolName, rawToolArgs);
+        if (!validation.valid) {
+            _markError(activeStreamId, validation.error);
             return;
         }
-        var parsedArgs = Mcp.parseToolArguments(rawToolArgs);
-        if (!parsedArgs.valid) {
-            _markError(activeStreamId, "MCP tool call blocked. Invalid arguments for '" + toolName + "': " + parsedArgs.error);
-            return;
-        }
-        var toolArgs = parsedArgs.value;
-        var argumentsText = Mcp.formatToolArguments(toolArgs, 0);
-        argumentBlockMessage = _toolArgumentBlockMessage(toolName, argumentsText);
-        if (argumentBlockMessage) {
-            _markError(activeStreamId, argumentBlockMessage);
-            return;
-        }
-        _requestToolApproval(toolCall, toolName, toolArgs, argumentsText);
+        _requestToolApproval(toolCall, toolName, validation.value, validation.text);
     }
 
     function _toolPermissionBlockMessage(toolName) {
@@ -407,6 +395,40 @@ Item {
         return "MCP tool call blocked. The arguments for '" + toolName + "' are too large to review safely.";
     }
 
+    function _validateToolArguments(toolName, rawArguments) {
+        var rawText = Mcp.formatToolArguments(rawArguments, 0);
+        var sizeError = _toolArgumentBlockMessage(toolName, rawText);
+        if (sizeError)
+            return { valid: false, value: {}, text: "", error: sizeError };
+
+        var parsed = Mcp.parseToolArguments(rawArguments);
+        if (!parsed.valid) {
+            return {
+                valid: false,
+                value: {},
+                text: "",
+                error: "MCP tool call blocked. Invalid arguments for '" + toolName + "': " + parsed.error
+            };
+        }
+
+        var text = Mcp.formatToolArguments(parsed.value, 0);
+        sizeError = _toolArgumentBlockMessage(toolName, text);
+        if (sizeError)
+            return { valid: false, value: {}, text: "", error: sizeError };
+
+        var schemaValidation = McpSchema.validateToolArguments(
+            Mcp.findTool(mcpTools, toolName), parsed.value);
+        if (!schemaValidation.valid) {
+            return {
+                valid: false,
+                value: {},
+                text: "",
+                error: "MCP tool call blocked. " + schemaValidation.error
+            };
+        }
+        return { valid: true, value: parsed.value, text: text, error: "" };
+    }
+
     function _requestToolApproval(toolCall, toolName, toolArgs, argumentsText) {
         _pendingApprovalToolCall = toolCall;
         _pendingApprovalToolName = toolName;
@@ -424,17 +446,12 @@ Item {
             _markError(activeStreamId, blockMessage);
             return;
         }
-        var parsedArgs = Mcp.parseToolArguments(toolArgs);
-        if (!parsedArgs.valid) {
-            _markError(activeStreamId, "MCP tool call blocked. Invalid arguments for '" + toolName + "': " + parsedArgs.error);
+        var validation = _validateToolArguments(toolName, toolArgs);
+        if (!validation.valid) {
+            _markError(activeStreamId, validation.error);
             return;
         }
-        toolArgs = parsedArgs.value;
-        var argumentBlockMessage = _toolArgumentBlockMessage(toolName, Mcp.formatToolArguments(toolArgs, 0));
-        if (argumentBlockMessage) {
-            _markError(activeStreamId, argumentBlockMessage);
-            return;
-        }
+        toolArgs = validation.value;
         _appendToolAudit(activeStreamId, "\nCalling tool: " + toolName + "\n");
         _pendingCallId = -2;
         mcpToolCallRequested(toolName, toolArgs, approvedToolContracts);

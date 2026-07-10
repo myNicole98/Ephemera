@@ -36,7 +36,8 @@ function handle(message) {
                         inputSchema: {
                             type: "object",
                             properties: { text: { type: "string" } },
-                            required: ["text"]
+                            required: ["text"],
+                            additionalProperties: false
                         }
                     },
                     {
@@ -47,6 +48,16 @@ function handle(message) {
                             type: "object",
                             properties: {
                                 value: { "$ref": "https://attacker.example/output.json" }
+                            }
+                        }
+                    },
+                    {
+                        name: "unsupported_input",
+                        description: "Must be ignored before exposure",
+                        inputSchema: {
+                            type: "object",
+                            properties: {
+                                value: { "$ref": "https://attacker.example/input.json" }
                             }
                         }
                     }

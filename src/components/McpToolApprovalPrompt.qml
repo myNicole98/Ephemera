@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import qs.Common
 import qs.Widgets
+import "../lib/Mcp.js" as Mcp
 
 Rectangle {
     id: root
@@ -64,7 +65,7 @@ Rectangle {
 
         StyledText {
             width: parent.width
-            text: "Server: " + root.serverUrl
+            text: "Server: " + Mcp.formatReviewText(root.serverUrl)
             textFormat: Text.PlainText
             font.pixelSize: Theme.fontSizeSmall
             font.family: Theme.monoFontFamily

@@ -2,7 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import "../lib/Mcp.js" as Mcp
-import "../lib/McpResult.js" as McpResult
+import "../lib/McpSchema.js" as McpSchema
 import "../lib/Providers.js" as Providers
 
 Item {
@@ -17,7 +17,9 @@ Item {
     property bool isConnected: false
     property bool connecting: false
     property string connectionError: ""
+    property string nodeVersion: ""
     property string bridgeVersion: ""
+    property string undiciVersion: ""
     property int ignoredToolCount: 0
     property var tools: []
     property int _nextId: 1
@@ -41,8 +43,11 @@ Item {
     readonly property int _maxTools: 128
     readonly property int _maxToolsJsonChars: 1048576
     readonly property int _maxCursorChars: 4096
-    readonly property string _minimumBridgeVersion: "0.1.38"
-    readonly property string _maximumBridgeVersionExclusive: "0.1.39"
+    readonly property int _maxToolArgumentChars: 20000
+    readonly property string _minimumNodeVersion: "20.18.1"
+    readonly property string _reviewedBridgeVersion: "0.1.38"
+    readonly property string _minimumUndiciVersion: "7.28.0"
+    readonly property string _maximumUndiciVersionExclusive: "8.0.0"
     readonly property string _preferredProtocolVersion: "2025-11-25"
     readonly property var _supportedProtocolVersions: [
         "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"
@@ -58,9 +63,7 @@ Item {
 
     Component.onDestruction: {
         _reconnectPending = false;
-        _versionProbeCancelled = true;
-        if (bridgeVersionProbe.running)
-            bridgeVersionProbe.running = false;
+        _cancelVersionProbe();
         if (mcpProcess.running) {
             _stopRequested = true;
             mcpProcess.running = false;
@@ -76,7 +79,7 @@ Item {
         }
         if (isConnected || connecting)
             return;
-        if (mcpProcess.running || bridgeVersionProbe.running) {
+        if (mcpProcess.running || _versionProbeRunning()) {
             _reconnectPending = true;
             return;
         }
@@ -99,9 +102,7 @@ Item {
     function disconnectFromServer() {
         connectionError = "";
         _reconnectPending = false;
-        _versionProbeCancelled = true;
-        if (bridgeVersionProbe.running)
-            bridgeVersionProbe.running = false;
+        _cancelVersionProbe();
         if (mcpProcess.running) {
             _stopRequested = true;
             mcpProcess.running = false;
@@ -114,10 +115,8 @@ Item {
             return;
         connectionError = "";
         _reconnectPending = true;
-        _versionProbeCancelled = true;
 
-        if (bridgeVersionProbe.running) {
-            bridgeVersionProbe.running = false;
+        if (_cancelVersionProbe()) {
             _reset("MCP reconnecting.");
             return;
         }
@@ -141,11 +140,15 @@ Item {
             return -1;
         if (!args || typeof args !== "object" || Array.isArray(args))
             return -1;
+        if (!McpSchema.validateToolArguments(tool, args).valid)
+            return -1;
+        if (Mcp.formatToolArguments(args, 0).length > _maxToolArgumentChars)
+            return -1;
 
         var id = _nextId++;
         _pendingRequests[id] = {
             resolve: function(result) {
-                var validation = McpResult.validateToolResult(tool, result);
+                var validation = McpSchema.validateToolResult(tool, result);
                 if (!validation.valid) {
                     root.toolCallFailed(id, validation.error);
                     return;
@@ -240,22 +243,68 @@ Item {
         return "";
     }
 
+    function _versionProbeRunning() {
+        return nodeVersionProbe.running || bridgeVersionProbe.running;
+    }
+
+    function _cancelVersionProbe() {
+        var wasRunning = _versionProbeRunning();
+        if (!wasRunning)
+            return false;
+        _versionProbeCancelled = true;
+        if (nodeVersionProbe.running)
+            nodeVersionProbe.running = false;
+        if (bridgeVersionProbe.running)
+            bridgeVersionProbe.running = false;
+        return true;
+    }
+
+    function _finishCancelledProbe() {
+        if (!_versionProbeCancelled)
+            return false;
+        _versionProbeCancelled = false;
+        _resumePendingReconnect();
+        return true;
+    }
+
     function _startVersionProbe() {
         _versionProbeCancelled = false;
+        nodeVersion = "";
+        bridgeVersion = "";
+        undiciVersion = "";
+        _bridgeExecutable = "";
+        bridgeVersionTimer.restart();
+        nodeVersionProbe.command = ["node", "--version"];
+        nodeVersionProbe.running = true;
+    }
+
+    function _handleNodeVersionProbeFinished(exitCode, output) {
+        bridgeVersionTimer.stop();
+        if (_finishCancelledProbe())
+            return;
+
+        var version = String(output || "").trim();
+        if (exitCode !== 0 || !Mcp.isVersionAtLeast(version, _minimumNodeVersion)) {
+            _dependencyError("MCP requires Node.js " + _minimumNodeVersion + " or newer.");
+            return;
+        }
+        nodeVersion = version.replace(/^v/, "");
+        _startPackageProbe();
+    }
+
+    function _startPackageProbe() {
         bridgeVersionTimer.restart();
         bridgeVersionProbe.command = [
-            "npm", "list", "--global", "--json", "--long", "--depth=0", "mcp-remote"
+            "npm", "list", "--global", "--json", "--long", "--depth=1",
+            "mcp-remote", "undici"
         ];
         bridgeVersionProbe.running = true;
     }
 
-    function _handleVersionProbeFinished(exitCode, output) {
+    function _handlePackageProbeFinished(exitCode, output) {
         bridgeVersionTimer.stop();
-        if (_versionProbeCancelled) {
-            _versionProbeCancelled = false;
-            _resumePendingReconnect();
+        if (_finishCancelledProbe())
             return;
-        }
 
         if (exitCode !== 0) {
             _dependencyError("Could not inspect the global mcp-remote installation.");
@@ -268,13 +317,19 @@ Item {
             _dependencyError("mcp-remote is not installed globally in a supported npm layout. Install the reviewed 0.1.38 release.");
             return;
         }
-        if (!Mcp.isVersionInRange(version, _minimumBridgeVersion,
-                                  _maximumBridgeVersionExclusive)) {
-            _dependencyError("mcp-remote " + version + " is unsupported. Install the reviewed 0.1.38 release.");
+        if (version !== _reviewedBridgeVersion) {
+            _dependencyError("mcp-remote " + version + " is unsupported. Install the reviewed " + _reviewedBridgeVersion + " release.");
+            return;
+        }
+        if (!Mcp.isVersionInRange(packageInfo.undiciVersion,
+                                  _minimumUndiciVersion,
+                                  _maximumUndiciVersionExclusive)) {
+            _dependencyError("mcp-remote must use undici " + _minimumUndiciVersion + " or newer within major version 7. Reinstall the reviewed bridge release.");
             return;
         }
 
         bridgeVersion = version;
+        undiciVersion = packageInfo.undiciVersion;
         _bridgeExecutable = packageInfo.executable;
         _startBridge();
     }
@@ -303,7 +358,7 @@ Item {
         connectionTimer.restart();
 
         if (!_bridgeExecutable) {
-            _dependencyError("The verified mcp-remote executable is unavailable.");
+            _dependencyError("The version-checked mcp-remote executable is unavailable.");
             return;
         }
         var command = [_bridgeExecutable, mcpUrl];
@@ -336,9 +391,7 @@ Item {
     function _abortConnection(message) {
         connectionError = message;
         _reconnectPending = false;
-        _versionProbeCancelled = true;
-        if (bridgeVersionProbe.running)
-            bridgeVersionProbe.running = false;
+        _cancelVersionProbe();
         if (mcpProcess.running) {
             _stopRequested = true;
             mcpProcess.running = false;
@@ -584,7 +637,8 @@ Item {
                 var sanitized = Mcp.sanitizeTools(page.tools);
                 var supported = [];
                 for (var ti = 0; ti < sanitized.length; ti++) {
-                    if (!McpResult.outputSchemaSupportError(sanitized[ti].outputSchema))
+                    if (!McpSchema.inputSchemaSupportError(sanitized[ti].inputSchema)
+                            && !McpSchema.outputSchemaSupportError(sanitized[ti].outputSchema))
                         supported.push(sanitized[ti]);
                 }
                 ignoredToolCount = page.tools.length - supported.length;
@@ -628,9 +682,11 @@ Item {
         repeat: false
         onTriggered: {
             root._versionProbeCancelled = true;
+            if (nodeVersionProbe.running)
+                nodeVersionProbe.running = false;
             if (bridgeVersionProbe.running)
                 bridgeVersionProbe.running = false;
-            root._dependencyError("Timed out while checking the installed mcp-remote version.");
+            root._dependencyError("Timed out while checking the MCP runtime dependencies.");
         }
     }
 
@@ -642,6 +698,22 @@ Item {
     }
 
     // --- Processes ---
+
+    Process {
+        id: nodeVersionProbe
+        running: false
+
+        stdout: StdioCollector {
+            id: nodeVersionOutput
+            waitForEnd: true
+        }
+
+        stderr: StdioCollector {
+            waitForEnd: true
+        }
+
+        onExited: exitCode => root._handleNodeVersionProbeFinished(exitCode, nodeVersionOutput.text)
+    }
 
     Process {
         id: bridgeVersionProbe
@@ -656,7 +728,7 @@ Item {
             waitForEnd: true
         }
 
-        onExited: exitCode => root._handleVersionProbeFinished(exitCode, bridgeVersionOutput.text)
+        onExited: exitCode => root._handlePackageProbeFinished(exitCode, bridgeVersionOutput.text)
     }
 
     Process {

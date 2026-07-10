@@ -35,7 +35,7 @@ Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plug
 - `wl-copy` from [wl-clipboard](https://github.com/bugaevc/wl-clipboard) (for the copy button)
 - `secret-tool` from [libsecret](https://wiki.gnome.org/Projects/Libsecret) (optional — for storing API keys in the system keyring)
 - For Ollama: [Ollama](https://ollama.com) installed and at least one model pulled
-- For experimental MCP tools: Node.js 18+, npm, and the globally installed, reviewed `mcp-remote` 0.1.38 release
+- For experimental MCP tools: Node.js 20.18.1+, npm, and the globally installed `mcp-remote` 0.1.38 release with Undici >=7.28.0 and <8
 
 ## Installation
 
@@ -86,7 +86,7 @@ MCP tool calling is available only with the Ollama provider. Install the tested 
 npm install --global mcp-remote@0.1.38
 ```
 
-Ephemera checks the installed package and exact executable before every connection and accepts only the reviewed 0.1.38 release. The upstream bridge describes itself as experimental and has known transport and OAuth compatibility gaps, so MCP support remains opt-in and may require a manual reconnect. Configure the server under **Settings → MCP Tools**, review and approve the complete individual tool contracts that may be shown to the model, then enable model tool requests. Every invocation still requires a separate confirmation showing the server, tool, and complete arguments.
+Before every connection, Ephemera checks the Node.js version, the installed package metadata, the expected executable layout, the exact `mcp-remote` 0.1.38 version, and an accepted Undici range (>=7.28.0 and <8). This is a local version-and-layout gate, not cryptographic verification of installed files or proof that the installation has no other vulnerabilities. The upstream bridge describes itself as experimental and has known transport and OAuth compatibility gaps, so MCP support remains opt-in and may require a manual reconnect. Configure the server under **Settings → MCP Tools**, review and approve the complete individual tool contracts that may be shown to the model, then enable model tool requests. Arguments must match that approved input schema, and every invocation still requires a separate confirmation showing the server, tool, and complete arguments.
 
 HTTPS is the default for remote servers. Plain HTTP is accepted automatically only for loopback addresses; other HTTP endpoints require a separate warning toggle and should be used only on a trusted private network. Endpoint URLs cannot contain embedded credentials, query strings, or fragments because `mcp-remote` receives the URL as a process argument.
 

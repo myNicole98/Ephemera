@@ -131,7 +131,7 @@ function extractNpmPackageVersion(jsonText, packageName) {
  *
  * @param {string} jsonText - npm list JSON output.
  * @param {string} packageName - Package name to inspect.
- * @returns {{ version: string, executable: string }} Installed package information.
+ * @returns {{ version: string, executable: string, undiciVersion: string }} Installed package information.
  */
 function extractNpmPackageInfo(jsonText, packageName) {
     try {
@@ -143,13 +143,21 @@ function extractNpmPackageInfo(jsonText, packageName) {
         var bin = entry && entry.bin;
         var relativeBin = typeof bin === "string" ? bin : (bin && bin[String(packageName || "")]);
         relativeBin = String(relativeBin || "");
+        var runtimeDependencies = entry && entry.dependencies;
+        var undiciEntry = runtimeDependencies && runtimeDependencies.undici;
+        var undiciVersion = undiciEntry && undiciEntry.version
+            ? String(undiciEntry.version).trim() : "";
         if (!version || packagePath.charAt(0) !== "/" || relativeBin !== "dist/proxy.js")
-            return { version: "", executable: "" };
+            return { version: "", executable: "", undiciVersion: "" };
         if (/[\x00-\x1f\x7f]/.test(packagePath))
-            return { version: "", executable: "" };
-        return { version: version, executable: packagePath + "/" + relativeBin };
+            return { version: "", executable: "", undiciVersion: "" };
+        return {
+            version: version,
+            executable: packagePath + "/" + relativeBin,
+            undiciVersion: undiciVersion
+        };
     } catch (e) {
-        return { version: "", executable: "" };
+        return { version: "", executable: "", undiciVersion: "" };
     }
 }
 
@@ -561,14 +569,69 @@ function parseToolCall(toolCall) {
     };
 }
 
+// Keep this Unicode 17 Default_Ignorable_Code_Point predicate aligned with
+// Providers.js. The extra line/interlinear controls are unsafe in review text.
+function _isUnsafeReviewCodePoint(codePoint) {
+    return codePoint === 0x00ad || codePoint === 0x034f || codePoint === 0x061c
+        || (codePoint >= 0x115f && codePoint <= 0x1160)
+        || (codePoint >= 0x17b4 && codePoint <= 0x17b5)
+        || (codePoint >= 0x180b && codePoint <= 0x180f)
+        || (codePoint >= 0x200b && codePoint <= 0x200f)
+        || (codePoint >= 0x2028 && codePoint <= 0x202e)
+        || (codePoint >= 0x2060 && codePoint <= 0x206f)
+        || codePoint === 0x3164
+        || (codePoint >= 0xfe00 && codePoint <= 0xfe0f)
+        || codePoint === 0xfeff || codePoint === 0xffa0
+        || (codePoint >= 0xfff0 && codePoint <= 0xfffb)
+        || (codePoint >= 0x1bca0 && codePoint <= 0x1bca3)
+        || (codePoint >= 0x1d173 && codePoint <= 0x1d17a)
+        || (codePoint >= 0xe0000 && codePoint <= 0xe0fff);
+}
+
+function _reviewEscape(codePoint) {
+    var hex = codePoint.toString(16);
+    if (codePoint > 0xffff)
+        return "\\u{" + hex + "}";
+    while (hex.length < 4) hex = "0" + hex;
+    return "\\u" + hex;
+}
+
 function _escapeReviewControls(text) {
     var value = text === undefined || text === null ? "" : String(text);
-    return value.replace(/[\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g,
-        function(character) {
-            var hex = character.charCodeAt(0).toString(16);
-            while (hex.length < 4) hex = "0" + hex;
-            return "\\u" + hex;
-        });
+    var result = "";
+    for (var i = 0; i < value.length; i++) {
+        var first = value.charCodeAt(i);
+        var codePoint = first;
+        var width = 1;
+        var unpairedSurrogate = false;
+        if (first >= 0xd800 && first <= 0xdbff) {
+            if (i + 1 < value.length) {
+                var second = value.charCodeAt(i + 1);
+                if (second >= 0xdc00 && second <= 0xdfff) {
+                    codePoint = 0x10000 + ((first - 0xd800) * 0x400)
+                        + (second - 0xdc00);
+                    width = 2;
+                } else {
+                    unpairedSurrogate = true;
+                }
+            } else {
+                unpairedSurrogate = true;
+            }
+        } else if (first >= 0xdc00 && first <= 0xdfff) {
+            unpairedSurrogate = true;
+        }
+
+        var unsafeControl = (codePoint <= 0x08)
+            || (codePoint >= 0x0b && codePoint <= 0x0c)
+            || (codePoint >= 0x0e && codePoint <= 0x1f)
+            || (codePoint >= 0x7f && codePoint <= 0x9f);
+        if (unpairedSurrogate || unsafeControl || _isUnsafeReviewCodePoint(codePoint))
+            result += _reviewEscape(codePoint);
+        else
+            result += value.substr(i, width);
+        i += width - 1;
+    }
+    return result;
 }
 
 /**
@@ -604,6 +667,6 @@ function formatToolArguments(args, maxChars) {
 
     var limit = Number(maxChars) || 0;
     if (limit > 0 && text.length > limit)
-        return text.substring(0, limit) + "\n\n[Arguments truncated]";
+        return formatReviewText(text.substring(0, limit) + "\n\n[Arguments truncated]");
     return formatReviewText(text || "{}");
 }

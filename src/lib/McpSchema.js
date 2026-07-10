@@ -41,6 +41,53 @@ function _isSchemaObject(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function _isBoundedJsonValue(value, depth, budget, ancestors) {
+    if (!_takeBudget(budget, 1))
+        return false;
+    if (value === null || typeof value === "string" || typeof value === "boolean")
+        return true;
+    if (typeof value === "number")
+        return isFinite(value);
+    if (!value || typeof value !== "object" || depth > 32)
+        return false;
+    if (typeof value.toJSON === "function")
+        return false;
+
+    for (var ai = 0; ai < ancestors.length; ai++) {
+        if (ancestors[ai] === value)
+            return false;
+    }
+    ancestors.push(value);
+
+    var valid = true;
+    var keys = Object.keys(value);
+    if (Array.isArray(value)) {
+        // JSON.stringify silently turns holes into null and ignores named array
+        // properties. Reject both so the reviewed value is exactly what is sent.
+        if (keys.length !== value.length) {
+            valid = false;
+        } else {
+            for (var ii = 0; ii < value.length; ii++) {
+                if (!_hasOwn(value, String(ii))
+                        || !_isBoundedJsonValue(value[ii], depth + 1, budget, ancestors)) {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+    } else {
+        for (var ki = 0; ki < keys.length; ki++) {
+            if (!_isBoundedJsonValue(value[keys[ki]], depth + 1, budget, ancestors)) {
+                valid = false;
+                break;
+            }
+        }
+    }
+
+    ancestors.pop();
+    return valid;
+}
+
 function _schemaListError(value, depth, budget) {
     if (!Array.isArray(value) || value.length === 0)
         return "must be a non-empty array of schemas";
@@ -315,6 +362,56 @@ function _matchesJsonSchema(value, schema, depth, budget) {
         }
     }
     return true;
+}
+
+/**
+ * Return an explanation when an advertised input schema cannot be validated
+ * exactly by the bounded local validator.
+ *
+ * @param {Object|undefined} schema - Advertised MCP input schema.
+ * @returns {string} Empty when supported, otherwise a user-safe explanation.
+ */
+function inputSchemaSupportError(schema) {
+    if (schema === undefined)
+        return "Input schema is required.";
+    var error = _schemaSupportError(schema, 0, true, { remaining: _maxSchemaNodes });
+    return error ? "Input schema " + error + "." : "";
+}
+
+/**
+ * Validate model-provided arguments against the exact advertised input schema.
+ *
+ * @param {Object} tool - Current advertised tool contract.
+ * @param {Object} argumentsValue - Parsed tool arguments.
+ * @returns {{ valid: boolean, error: string }} Validation result.
+ */
+function validateToolArguments(tool, argumentsValue) {
+    if (!argumentsValue || typeof argumentsValue !== "object" || Array.isArray(argumentsValue))
+        return { valid: false, error: "MCP tool arguments must be an object." };
+
+    try {
+        if (!_isBoundedJsonValue(argumentsValue, 0,
+                                 { remaining: _maxValidationSteps }, [])) {
+            return {
+                valid: false,
+                error: "MCP tool arguments must contain only bounded JSON values."
+            };
+        }
+    } catch (e) {
+        return {
+            valid: false,
+            error: "MCP tool arguments must contain only bounded JSON values."
+        };
+    }
+
+    var inputSchema = tool && tool.inputSchema;
+    if (inputSchemaSupportError(inputSchema))
+        return { valid: false, error: "MCP tool uses an unsupported input schema." };
+
+    var validationBudget = { remaining: _maxValidationSteps };
+    if (!_matchesJsonSchema(argumentsValue, inputSchema, 0, validationBudget))
+        return { valid: false, error: "MCP tool arguments did not match the approved input schema." };
+    return { valid: true, error: "" };
 }
 
 /**

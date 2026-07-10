@@ -36,8 +36,12 @@ ShellRoot {
             if (!isConnected) return;
             root.connectionCount++;
             if (root.connectionCount === 1) {
-                if (tools.length !== 1 || tools[0].name !== "echo" || ignoredToolCount !== 1) {
-                    root.finish(false, "unsupported output schema was exposed");
+                if (tools.length !== 1 || tools[0].name !== "echo" || ignoredToolCount !== 2) {
+                    root.finish(false, "unsupported input or output schema was exposed");
+                    return;
+                }
+                if (!nodeVersion || bridgeVersion !== "0.1.38" || undiciVersion !== "7.28.0") {
+                    root.finish(false, "runtime dependency versions were not verified");
                     return;
                 }
                 root.echoApprovals = setToolApproved([], "echo", true);
@@ -47,6 +51,12 @@ ShellRoot {
                 }
                 if (callTool(" echo ", { text: "blocked" }, root.echoApprovals) >= 0) {
                     root.finish(false, "non-canonical tool name was accepted");
+                    return;
+                }
+                if (callTool("echo", { text: 7 }, root.echoApprovals) >= 0
+                        || callTool("echo", { text: "hello", hidden: true }, root.echoApprovals) >= 0
+                        || callTool("echo", { text: "x".repeat(20001) }, root.echoApprovals) >= 0) {
+                    root.finish(false, "arguments outside the approved input schema were accepted");
                     return;
                 }
                 var callId = callTool("echo", { text: "__invalid_result__" }, root.echoApprovals);

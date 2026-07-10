@@ -20,14 +20,19 @@ ShellRoot {
         Qt.quit();
     }
 
-    function startToolTurn(streamId, approvals) {
+    function startToolTurn(streamId, approvals, toolArgs) {
         activeApprovals = approvals;
         streaming.beginStream(streamId, 0, [{ role: "user", content: "echo hello" }]);
         streaming.handleStreamChunk(JSON.stringify({
             message: {
                 role: "assistant",
                 content: "",
-                tool_calls: [{ function: { name: "echo", arguments: { text: "hello" } } }]
+                tool_calls: [{
+                    function: {
+                        name: "echo",
+                        arguments: toolArgs || { text: "hello" }
+                    }
+                }]
             },
             done: true,
             eval_count: 3
@@ -105,9 +110,21 @@ ShellRoot {
                     root.finish(false, "permission was not rechecked before execution");
                     return;
                 }
+                root.phase = "invalid-input";
+                Qt.callLater(function() {
+                    root.startToolTurn("invalid-input", root.approvedContracts,
+                        { text: 7, hidden: true });
+                });
+            } else if (root.phase === "invalid-input") {
+                if (root.toolRequestCount !== 0 || streaming.toolApprovalPending
+                        || message.indexOf("approved input schema") < 0) {
+                    root.finish(false, "out-of-contract arguments were not blocked before approval");
+                    return;
+                }
                 root.phase = "approved";
                 Qt.callLater(function() {
-                    root.startToolTurn("approved", root.approvedContracts);
+                    root.startToolTurn("approved", root.approvedContracts,
+                        { text: "hello" });
                     if (!streaming.toolApprovalPending
                             || streaming.pendingToolArgumentsText.indexOf('"text": "hello"') < 0) {
                         root.finish(false, "confirmation did not show complete arguments");
