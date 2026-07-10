@@ -246,37 +246,37 @@ RowLayout {
 
     Item { Layout.fillWidth: true }
 
-    DankActionButton {
+    EphemeraActionButton {
         iconName: "tune"
         tooltipText: root.showSettings ? "Hide settings" : "Settings"
         onClicked: root.settingsToggled()
     }
 
-    DankActionButton {
+    EphemeraActionButton {
         iconName: "content_copy"
         tooltipText: "Copy conversation"
         visible: root.slideoutExpanded
-        enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
+        actionEnabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
         onClicked: root.exportRequested()
     }
 
-    DankActionButton {
+    EphemeraActionButton {
         iconName: "save_as"
         tooltipText: "Save conversation as .md"
         visible: root.slideoutExpanded
-        enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
+        actionEnabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
         onClicked: root.exportFileRequested()
     }
 
-    DankActionButton {
+    EphemeraActionButton {
         iconName: "delete_sweep"
         tooltipText: "Clear chat"
         visible: root.slideoutExpanded
-        enabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
+        actionEnabled: (aiService.messageCount || 0) > 0 && !aiService.isStreaming
         onClicked: root.clearRequested()
     }
 
-    DankActionButton {
+    EphemeraActionButton {
         id: overflowBtn
         iconName: "more_vert"
         tooltipText: "More actions"
@@ -394,7 +394,7 @@ RowLayout {
         }
     }
 
-    DankActionButton {
+    EphemeraActionButton {
         id: expandBtn
         iconName: root.slideoutExpanded ? "unfold_less" : "unfold_more"
         iconSize: Theme.iconSize - 4
@@ -410,7 +410,7 @@ RowLayout {
         }
     }
 
-    DankActionButton {
+    EphemeraActionButton {
         iconName: aiService.panelOnLeft ? "last_page" : "first_page"
         iconSize: Theme.iconSize - 4
         iconColor: Theme.surfaceText
@@ -418,7 +418,7 @@ RowLayout {
         onClicked: root.panelSideToggled()
     }
 
-    DankActionButton {
+    EphemeraActionButton {
         iconName: "close"
         iconSize: Theme.iconSize - 4
         iconColor: Theme.surfaceText

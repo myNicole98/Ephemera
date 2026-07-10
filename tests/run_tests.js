@@ -2039,6 +2039,62 @@ section("EphemeraPanel rapid side switching");
     );
 })();
 
+// ═════════════════════════════════════════════════════════════════
+// ChatHeader tooltip coverage
+// ═════════════════════════════════════════════════════════════════
+
+section("ChatHeader action tooltips");
+
+(function() {
+    var headerSource = fs.readFileSync(
+        path.join(__dirname, "..", "src/components/ChatHeader.qml"),
+        "utf8"
+    );
+    var actionSource = fs.readFileSync(
+        path.join(__dirname, "..", "src/components/EphemeraActionButton.qml"),
+        "utf8"
+    );
+
+    var headerActions = headerSource.match(/\bEphemeraActionButton\s*\{/g) || [];
+    var tooltipBindings = headerSource.match(/\btooltipText\s*:/g) || [];
+    var availabilityBindings = headerSource.match(/\bactionEnabled\s*:/g) || [];
+
+    assertEqual(headerActions.length, 8, "every header action uses the tooltip-safe wrapper");
+    assertEqual(tooltipBindings.length, 8, "every header action declares tooltip text");
+    assertEqual(availabilityBindings.length, 3, "conversation actions preserve disabled click state");
+    assert(
+        actionSource.indexOf("enabled: root.actionEnabled") >= 0
+            && actionSource.indexOf("HoverHandler {") >= 0
+            && actionSource.indexOf("tooltip.show(root.tooltipText, root") >= 0,
+        "disabled actions retain an independent hover tooltip path"
+    );
+
+    [
+        "Settings", "Copy conversation", "Save conversation as .md",
+        "Clear chat", "More actions", "Collapse", "Move to right", "Close"
+    ].forEach(function(label) {
+        assert(headerSource.indexOf(label) >= 0,
+            "header exposes tooltip label: " + label);
+    });
+})();
+
+section("Ollama process identity");
+
+(function() {
+    var managerSource = fs.readFileSync(
+        path.join(__dirname, "..", "src/services/OllamaManager.qml"),
+        "utf8"
+    );
+    assert(
+        managerSource.indexOf("_ollamaPid = ollamaProcess.processId") >= 0,
+        "Ollama shutdown tracks Quickshell's current processId property"
+    );
+    assert(
+        managerSource.indexOf("ollamaProcess.pid") < 0,
+        "Ollama manager does not read the obsolete undefined pid property"
+    );
+})();
+
 // ─── Summary ───────────────────────────────────────────────────
 
 console.log("\n" + "=".repeat(50));
