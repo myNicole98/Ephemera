@@ -19,8 +19,16 @@ Item {
     // --- Streaming state ---
     property bool isStreaming: false
     property string activeStreamId: ""
+    property string _activeProvider: ""
+    property int _streamGeneration: 0
     property string streamBuffer: ""
     property string pendingStdinBody: ""
+    property var _pendingLaunch: null
+    property string _fetchStreamId: ""
+    property string _fetchProvider: ""
+    property int _fetchGeneration: -1
+    property string _fetchOutput: ""
+    property bool _processActive: false
     property real streamStartTime: 0
     property int streamTokenCount: 0
     property int _apiOutputTokens: 0
@@ -32,6 +40,9 @@ Item {
     property string _roundThinking: ""
     property int _streamVariantIndex: 0
     property string _lastFinalizedStreamId: ""
+    property string _completedFetchStreamId: ""
+    property string _completedFetchProvider: ""
+    property int _completedFetchGeneration: -1
     property bool _seenToolCalls: false
     property var _pendingToolCalls: []
     property var _allToolCalls: []
@@ -58,6 +69,15 @@ Item {
     readonly property string pendingToolName: _pendingApprovalToolName
     readonly property string pendingToolDescription: _pendingApprovalToolDescription
     readonly property string pendingToolArgumentsText: _pendingApprovalToolArgumentsText
+    readonly property bool transportBusy: _processActive
+    readonly property string streamPhase: {
+        if (!isStreaming) return "idle";
+        if (toolApprovalPending) return "awaiting-approval";
+        if (_pendingCallId >= 0) return "executing-tool";
+        if (_pendingLaunch) return "queued";
+        if (_fetchMatchesActiveStream()) return "fetching";
+        return "preparing";
+    }
     property int lastHttpStatus: 0
     property bool lastRequestFailed: false
 
@@ -77,8 +97,9 @@ Item {
     signal streamFinalized(string streamId, string stats)
     signal streamError(string streamId, string message)
     signal streamCancelled(string streamId, string stats)
-    signal streamToolRoundReady(string streamId, var messages)
-    signal mcpToolCallRequested(string toolName, var toolArguments, var approvedContracts)
+    signal streamToolRoundReady(string streamId, var messages, string streamProvider, int streamGeneration)
+    signal mcpToolCallRequested(string toolName, var toolArguments, var approvedContracts,
+                                string streamId, string streamProvider, int streamGeneration)
     signal mcpToolCallCancellationRequested(var callId, string reason)
 
     // --- Public API ---
@@ -92,21 +113,121 @@ Item {
         _consecutiveErrors = 0;
     }
 
-    function launchCurl(curlResult, messages) {
-        if (chatFetcher.running) return;
+    function activeStreamContext() {
+        return {
+            streamId: activeStreamId,
+            provider: _activeProvider,
+            generation: _streamGeneration
+        };
+    }
 
+    function matchesActiveStream(streamId, streamProvider, streamGeneration) {
+        return isStreaming
+            && activeStreamId === streamId
+            && _activeProvider === streamProvider
+            && _streamGeneration === streamGeneration;
+    }
+
+    function launchCurl(curlResult, messages, streamId, streamProvider, streamGeneration) {
+        if (!curlResult
+                || !matchesActiveStream(streamId, streamProvider, streamGeneration))
+            return false;
+
+        var launch = {
+            curlResult: curlResult,
+            messages: messages,
+            streamId: streamId,
+            provider: streamProvider,
+            generation: streamGeneration
+        };
+        if (_processActive) {
+            // Process.running=false requests termination asynchronously. Keep
+            // exactly one identity-bound launch queued until onExited.
+            _pendingLaunch = launch;
+            chatFetcher.running = false;
+            return true;
+        }
+        return _startCurl(launch);
+    }
+
+    function _startCurl(launch) {
+        if (!launch || !matchesActiveStream(
+                launch.streamId, launch.provider, launch.generation))
+            return false;
+        if (_processActive) {
+            _pendingLaunch = launch;
+            chatFetcher.running = false;
+            return true;
+        }
+
+        _pendingLaunch = null;
+        _fetchStreamId = launch.streamId;
+        _fetchProvider = launch.provider;
+        _fetchGeneration = launch.generation;
+        // StdioCollector exposes a fresh process buffer after the first read,
+        // but may still expose the prior text when a new process emits no
+        // output. Parse deltas from zero and keep a launch-local completion
+        // buffer so zero-output runs cannot replay the prior response.
         streamCollector.lastLen = 0;
+        _fetchOutput = "";
         streamBuffer = "";
         _insideThinkTag = false;
         _tagBuffer = "";
         _roundContent = "";
         _roundThinking = "";
-        if (messages)
-            _conversationMessages = messages;
-        pendingStdinBody = curlResult.body;
+        if (launch.messages)
+            _conversationMessages = launch.messages;
+        pendingStdinBody = launch.curlResult.body;
         chatFetcher.stdinEnabled = true;
-        chatFetcher.command = curlResult.cmd;
+        chatFetcher.command = launch.curlResult.cmd;
+        _processActive = true;
         chatFetcher.running = true;
+        return true;
+    }
+
+    function _fetchMatchesActiveStream() {
+        return matchesActiveStream(
+            _fetchStreamId, _fetchProvider, _fetchGeneration);
+    }
+
+    function _fetchMatchesFinalizedStream() {
+        return !isStreaming
+            && _fetchStreamId.length > 0
+            && _fetchStreamId === _completedFetchStreamId
+            && _fetchProvider === _completedFetchProvider
+            && _fetchGeneration === _completedFetchGeneration;
+    }
+
+    function _finishCurlProcess(exitCode, failedToStart) {
+        if (!_processActive)
+            return;
+
+        var fetchStreamId = _fetchStreamId;
+        var fetchMatches = _fetchMatchesActiveStream();
+        var queued = _pendingLaunch;
+        _processActive = false;
+        _pendingLaunch = null;
+        _fetchStreamId = "";
+        _fetchProvider = "";
+        _fetchGeneration = -1;
+
+        if (queued && _startCurl(queued))
+            return;
+        if (!fetchMatches)
+            return;
+        if (failedToStart) {
+            _markError(fetchStreamId,
+                "Could not start the response process. Make sure curl is installed and available in PATH.");
+        } else if (exitCode !== 0) {
+            _markError(fetchStreamId, _curlExitHint(exitCode));
+        }
+    }
+
+    function failActiveStream(message, streamId, streamProvider, streamGeneration) {
+        if (!matchesActiveStream(streamId, streamProvider, streamGeneration))
+            return false;
+        _markError(streamId, message);
+        return true;
     }
 
     function cancel() {
@@ -124,9 +245,12 @@ Item {
         _insideThinkTag = false;
         isStreaming = false;
         _clearToolState(true, "Stream cancelled.");
+        _pendingLaunch = null;
 
         streamCancelled(streamId, _buildStreamStats());
         chatFetcher.running = false;
+        activeStreamId = "";
+        _activeProvider = "";
     }
 
     function approvePendingToolCall() {
@@ -156,6 +280,7 @@ Item {
             chatFetcher.running = false;
         isStreaming = false;
         activeStreamId = "";
+        _activeProvider = "";
         streamStartTime = 0;
         streamTokenCount = 0;
         _apiOutputTokens = 0;
@@ -168,10 +293,17 @@ Item {
         _clearToolState(true, "Stream reset.");
         streamBuffer = "";
         pendingStdinBody = "";
+        _pendingLaunch = null;
+        _lastFinalizedStreamId = "";
+        _completedFetchStreamId = "";
+        _completedFetchProvider = "";
+        _completedFetchGeneration = -1;
     }
 
     function beginStream(streamId, variantIndex, messages) {
+        _streamGeneration++;
         activeStreamId = streamId;
+        _activeProvider = provider;
         isStreaming = true;
         streamStartTime = 0;
         streamTokenCount = 0;
@@ -183,8 +315,17 @@ Item {
         _roundThinking = "";
         _apiOutputTokens = 0;
         _streamVariantIndex = variantIndex;
+        _completedFetchStreamId = "";
+        _completedFetchProvider = "";
+        _completedFetchGeneration = -1;
         _clearToolState(false, "");
         _conversationMessages = messages || [];
+        _pendingLaunch = null;
+    }
+
+    onProviderChanged: {
+        if (isStreaming && _activeProvider && provider !== _activeProvider)
+            cancel();
     }
 
     function exportToClipboard(markdownText) {
@@ -222,7 +363,7 @@ Item {
                 continue;
             }
 
-            var delta = StreamParser.parseDelta(jsonPart, provider);
+            var delta = StreamParser.parseDelta(jsonPart, _activeProvider);
 
             if (delta.outputTokens > 0)
                 _apiOutputTokens = delta.outputTokens;
@@ -245,7 +386,7 @@ Item {
             }
             if (delta.content) {
                 streamTokenCount++;
-                if (!Providers.getProviderInfo(provider).hasNativeThinking) {
+                if (!Providers.getProviderInfo(_activeProvider).hasNativeThinking) {
                     var tagResult = StreamParser.routeThinkTags(delta.content, _tagBuffer, _insideThinkTag);
                     _tagBuffer = tagResult.tagBuffer;
                     _insideThinkTag = tagResult.insideThinkTag;
@@ -307,7 +448,7 @@ Item {
 
         if (isStreaming) {
             if (_roundContent.length === 0 && bodyText && lastHttpStatus > 0 && lastHttpStatus < 400) {
-                var fallback = StreamParser.extractNonStreamingText(bodyText, provider);
+                var fallback = StreamParser.extractNonStreamingText(bodyText, _activeProvider);
                 if (fallback && fallback.length > 0)
                     _applyModelContentDelta(activeStreamId, fallback);
             }
@@ -331,7 +472,7 @@ Item {
         if (isStreaming && !_seenToolCalls) {
             if (lastHttpStatus === 0 && _roundContent.length === 0) {
                 var providerName = _providerDisplayName();
-                var connMsg = provider === "ollama"
+                var connMsg = _activeProvider === "ollama"
                     ? "Could not connect to Ollama.\nMake sure Ollama is running at " + ollamaUrl + "."
                     : "Could not connect to " + providerName + ".\nCheck your network connection and provider settings.";
                 _markError(activeStreamId, connMsg);
@@ -453,10 +594,18 @@ Item {
         }
         toolArgs = validation.value;
         _appendToolAudit(activeStreamId, "\nCalling tool: " + toolName + "\n");
+        _pendingToolCallMeta = {
+            name: toolName,
+            streamId: activeStreamId,
+            provider: _activeProvider,
+            generation: _streamGeneration
+        };
         _pendingCallId = -2;
-        mcpToolCallRequested(toolName, toolArgs, approvedToolContracts);
+        mcpToolCallRequested(toolName, toolArgs, approvedToolContracts,
+                             activeStreamId, _activeProvider, _streamGeneration);
         if (_pendingCallId === -2) {
             _pendingCallId = -1;
+            _pendingToolCallMeta = null;
             _markError(activeStreamId, "MCP tool execution handler is unavailable.");
         }
     }
@@ -471,8 +620,18 @@ Item {
             _markError(activeStreamId, "MCP tool call was rejected by the execution boundary.");
             return;
         }
+        if (!_pendingToolCallMeta
+                || _pendingToolCallMeta.name !== toolName
+                || !matchesActiveStream(_pendingToolCallMeta.streamId,
+                                        _pendingToolCallMeta.provider,
+                                        _pendingToolCallMeta.generation)) {
+            if (callId >= 0)
+                mcpToolCallCancellationRequested(callId, "Stream identity changed before tool execution.");
+            _pendingCallId = -1;
+            _pendingToolCallMeta = null;
+            return;
+        }
         _pendingCallId = callId;
-        _pendingToolCallMeta = { name: toolName };
         toolCallTimer.restart();
     }
 
@@ -511,7 +670,7 @@ Item {
         _seenToolCalls = false;
         _pendingToolCalls = [];
         _allToolCalls = [];
-        streamToolRoundReady(activeStreamId, updatedMessages);
+        streamToolRoundReady(activeStreamId, updatedMessages, _activeProvider, _streamGeneration);
     }
 
     Timer {
@@ -563,15 +722,21 @@ Item {
         _insideThinkTag = false;
 
         _lastFinalizedStreamId = streamId;
+        _completedFetchStreamId = streamId;
+        _completedFetchProvider = _activeProvider;
+        _completedFetchGeneration = _streamGeneration;
+        _pendingLaunch = null;
         isStreaming = false;
         activeStreamId = "";
         _cooldownUntil = 0;
         _consecutiveErrors = 0;
         streamFinalized(streamId, _buildStreamStats());
+        _activeProvider = "";
     }
 
     function _markError(streamId, message) {
         _streamContent = message;
+        _pendingLaunch = null;
         _clearToolState(true, message);
         isStreaming = false;
         activeStreamId = "";
@@ -579,6 +744,7 @@ Item {
         _consecutiveErrors++;
         _cooldownUntil = Backoff.computeCooldownUntil(_consecutiveErrors, _backoffBaseMs, _backoffMaxMs);
         streamError(streamId, message);
+        _activeProvider = "";
     }
 
     function _buildStreamStats() {
@@ -596,11 +762,12 @@ Item {
     }
 
     function _providerDisplayName() {
-        return Providers.getProviderInfo(provider).name;
+        return Providers.getProviderInfo(_activeProvider || provider).name;
     }
 
     function _curlExitHint(exitCode) {
-        return ErrorHints.curlExitHint(exitCode, provider, _providerDisplayName(), ollamaUrl);
+        return ErrorHints.curlExitHint(exitCode, _activeProvider || provider,
+                                       _providerDisplayName(), ollamaUrl);
     }
 
     // --- Processes ---
@@ -611,10 +778,18 @@ Item {
         stdinEnabled: true
 
         onRunningChanged: {
-            if (running && root.pendingStdinBody) {
-                chatFetcher.write(root.pendingStdinBody);
-                chatFetcher.stdinEnabled = false;
-                root.pendingStdinBody = "";
+            if (running) {
+                root._processActive = true;
+                if (root.pendingStdinBody) {
+                    chatFetcher.write(root.pendingStdinBody);
+                    chatFetcher.stdinEnabled = false;
+                    root.pendingStdinBody = "";
+                }
+            } else if (root._processActive) {
+                // Quickshell emits runningChanged, but not exited, when QProcess
+                // fails to start. Complete the lifecycle here so future launches
+                // cannot remain queued behind a process that never existed.
+                root._finishCurlProcess(-1, true);
             }
         }
 
@@ -624,26 +799,35 @@ Item {
             property int lastLen: 0
 
             onTextChanged: {
+                var fetchIsActive = root._fetchMatchesActiveStream();
+                var fetchIsFinalized = root._fetchMatchesFinalizedStream();
+                // Enforce the cap for the process even after its stream
+                // identity has been cancelled. Stale output remains inert,
+                // but it cannot grow without bound while termination drains.
                 if (text.length > 5242880) {
                     chatFetcher.running = false;
-                    root._markError(root.activeStreamId, "Response exceeded maximum buffer size (5 MB).");
+                    if (fetchIsActive)
+                        root._markError(root.activeStreamId,
+                            "Response exceeded maximum buffer size (5 MB).");
                     return;
                 }
+                if (!fetchIsActive && !fetchIsFinalized)
+                    return;
                 var newData = text.substring(lastLen);
                 lastLen = text.length;
-                root.handleStreamChunk(newData);
+                root._fetchOutput += newData;
+                if (fetchIsActive)
+                    root.handleStreamChunk(newData);
             }
 
             onStreamFinished: {
-                root.handleStreamFinished(text);
+                if (root._fetchMatchesActiveStream()
+                        || root._fetchMatchesFinalizedStream())
+                    root.handleStreamFinished(root._fetchOutput);
             }
         }
 
-        onExited: exitCode => {
-            if (exitCode !== 0 && root.isStreaming) {
-                root._markError(root.activeStreamId, root._curlExitHint(exitCode));
-            }
-        }
+        onExited: exitCode => root._finishCurlProcess(exitCode, false)
     }
 
     Process {

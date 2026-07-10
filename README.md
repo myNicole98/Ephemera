@@ -35,7 +35,7 @@ Ephemera is a [Quickshell](https://github.com/quickshell-mirror/quickshell) plug
 - `wl-copy` from [wl-clipboard](https://github.com/bugaevc/wl-clipboard) (for the copy button)
 - `secret-tool` from [libsecret](https://wiki.gnome.org/Projects/Libsecret) (optional — for storing API keys in the system keyring)
 - For Ollama: [Ollama](https://ollama.com) installed and at least one model pulled
-- For experimental MCP tools: Node.js 20.18.1+, npm, and the globally installed `mcp-remote` 0.1.38 release with Undici >=7.28.0 and <8
+- For experimental MCP tools: native Linux, Node.js 24.17.0 or newer within major version 24, npm, and the globally installed `mcp-remote` 0.1.38 release. Both Node's bundled Undici and the bridge's direct Undici dependency must be >=7.28.0 and <8; the resolved `open` browser launcher must be the reviewed 10.1.0 or 10.2.0 release
 
 ## Installation
 
@@ -83,12 +83,12 @@ If `secret-tool` is not installed, or you prefer env vars, set them before start
 MCP tool calling is available only with the Ollama provider. Install the tested bridge release globally:
 
 ```bash
-npm install --global mcp-remote@0.1.38
+npm install --global mcp-remote@0.1.38 undici@7.28.0 open@10.2.0
 ```
 
-Before every connection, Ephemera checks the Node.js version, the installed package metadata, the expected executable layout, the exact `mcp-remote` 0.1.38 version, and an accepted Undici range (>=7.28.0 and <8). This is a local version-and-layout gate, not cryptographic verification of installed files or proof that the installation has no other vulnerabilities. The upstream bridge describes itself as experimental and has known transport and OAuth compatibility gaps, so MCP support remains opt-in and may require a manual reconnect. Configure the server under **Settings → MCP Tools**, review and approve the complete individual tool contracts that may be shown to the model, then enable model tool requests. Arguments must match that approved input schema, and every invocation still requires a separate confirmation showing the server, tool, and complete arguments.
+Before every connection, Ephemera checks the exact Node executable and its bundled Undici, the installed package metadata, the expected executable layout, the exact `mcp-remote` 0.1.38 version, and the bridge's resolved direct Undici and `open` dependencies. Both Undici implementations must be >=7.28.0 and <8; `open` must be exactly 10.1.0 or 10.2.0. A preload then makes the checked direct dependency authoritative for global and direct Fetch calls and rejects every automatic HTTP redirect. Concurrent OAuth startup is intentionally unsupported: when this bridge version tries to poll another process's loopback auth endpoint, Ephemera terminates the secondary bridge instead of permitting loopback access or letting it delete the live peer's lock. Retry after the first authorization finishes. This is a local version-and-layout gate, not cryptographic verification of installed files or proof that the installation has no other vulnerabilities; the local Node and global npm installation remain part of the trusted computing base. The upstream bridge describes itself as experimental and has known transport and OAuth compatibility gaps, so MCP support remains opt-in and may require a manual reconnect. Configure the server under **Settings → MCP Tools**, review and approve the complete individual tool contracts that may be shown to the model, then enable model tool requests. Arguments must match that approved input schema, and every invocation still requires a separate confirmation showing the server, tool, and complete arguments.
 
-HTTPS is the default for remote servers. Plain HTTP is accepted automatically only for loopback addresses; other HTTP endpoints require a separate warning toggle and should be used only on a trusted private network. Endpoint URLs cannot contain embedded credentials, query strings, or fragments because `mcp-remote` receives the URL as a process argument.
+HTTPS is the default for remote servers. Plain HTTP is accepted automatically only for loopback addresses; other HTTP endpoints require a separate warning toggle and should be used only on a trusted private network. Bridge Fetch redirects fail closed, including HTTPS redirects, so they cannot downgrade an approved endpoint to plaintext. The initial OAuth URL handed to the Linux browser must obey the same scheme policy; subsequent navigation inside that external browser remains governed by the browser. The guarded browser handoff supports native Linux and intentionally rejects WSL, whose launcher path bypasses `xdg-open`. Endpoint URLs cannot contain embedded credentials, query strings, or fragments because `mcp-remote` receives the URL as a process argument.
 
 `mcp-remote` performs OAuth when required and stores its OAuth session under `~/.mcp-auth`. Those credentials are managed by the bridge, not by Ephemera or PluginService.
 
@@ -100,6 +100,7 @@ All settings are configurable from the in-app settings panel (tune icon):
 - **Model** — auto-discovered dropdown for Ollama, free-text for others
 - **Ollama URL** — defaults to `http://localhost:11434`
 - **Ollama Thinking** — Default, Off, Low, Medium, or High reasoning effort for Ollama models that support it; Off requests no thinking
+- **Ollama Context Window** — optional 4K–128K native-chat context for MCP/tool rounds; the model default remains the memory-efficient default
 - **Custom Base URL** — for OpenAI-compatible endpoints (validated: http/https only, valid hostname, max 2048 chars)
 - **Extended Thinking** — toggle for Anthropic provider; enables extended thinking (forces temperature to 1.0, allocates 80% of max tokens as thinking budget)
 - **System Prompt** — prepended to every request; quick-select presets available or enter custom text

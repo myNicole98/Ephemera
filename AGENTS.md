@@ -10,10 +10,11 @@ Depends on parent config modules: `qs.Common` (Theme), `qs.Widgets` (Dank* compo
 
 Unit tests: `node tests/run_tests.js`
 MCP QML lifecycle test: `tests/run_qml_tests.sh` (requires Quickshell)
+Live panel geometry test: `tests/run_panel_qml_test.sh` (requires Quickshell and an active Wayland compositor)
 
 ## Architecture
 
-EphemeraService.qml is the **coordinator** that owns message state (`messagesModel`, `messageIndexMap`, `variantStore`) and orchestrates child services (KeyringService, StreamingService, OllamaManager, MCPService). Child services communicate via signals; the coordinator applies their outputs to the shared message model. Property aliases expose child state so UI binds to `aiService.*` unchanged.
+EphemeraService.qml is the **coordinator** that owns message state (`messagesModel`, `messageIndexMap`, `variantStore`) and orchestrates child services (KeyringService, StreamingService, OllamaManager, MCPService). Child services communicate via signals; the coordinator applies their outputs to the shared message model. Narrow facade properties expose child state so UI binds to `aiService.*` without receiving executable service objects.
 
 ## Gotchas & Landmines
 
@@ -26,8 +27,8 @@ EphemeraService.qml is the **coordinator** that owns message state (`messagesMod
 - **pluginData null during init** — use `??` operator; values are `undefined` before first load.
 - **DMS auto-injected properties** — `pluginData`, `pluginService`, `pluginId` are injected into the root component. Don't redeclare them.
 - **`_keyringCache` clone requirement** — always use `_cloneCache()` when mutating `_keyringCache`. QML `property var` skips change notification when reassigned the same object reference, silently breaking `hasApiKey`/`missingApiKey` bindings via the alias chain.
-- **StreamingService signal ordering** — the coordinator must set up the message model entry and index map BEFORE calling `streamingService.launchCurl()`, or `findIndexById` will return -1 in signal handlers.
-- **MCP bridge gate** — MCP requires Node.js 20.18.1+ and the globally installed, reviewed `mcp-remote` 0.1.38 release with Undici >=7.28.0 and <8. MCPService resolves the exact npm executable and direct dependency versions through `npm list --global --long`; never fall back to an unchecked `PATH` bridge command or accept an unreviewed top-level version.
+- **StreamingService signal ordering** — the coordinator must set up the message model entry and index map BEFORE calling `streamingService.launchCurl()`, and every launch/resume must carry the stream's provider and generation identity. Replacement curl launches wait for the previous Process `onExited`; stale output is ignored.
+- **MCP bridge gate** — MCP requires native Linux, Node.js >=24.17.0 and <25 with bundled Undici >=7.28.0 and <8, plus the globally installed, reviewed `mcp-remote` 0.1.38 release with a resolved direct Undici in the same range and `open` exactly 10.1.0 or 10.2.0. MCPService captures the exact Node executable and npm-reported package layout through probes, and `src/runtime/McpFetchGuard.cjs` revalidates the loaded packages, installs the checked Fetch implementation, blocks redirects, and terminates secondary concurrent OAuth attempts rather than allowing loopback polling. Never fall back to an unchecked `PATH` bridge command or accept an unreviewed package layout.
 - **MCP reconnect ordering** — setting `Process.running = false` only sends SIGTERM. Reconnects must wait for `onExited`; never restart with `Qt.callLater()` while the old process is still running.
 - **MCP round state** — `_roundContent`/`_roundThinking` contain only the current model turn. Tool audit text may be displayed through `_streamThinking` but must never be sent back as model-authored thinking.
 
@@ -58,7 +59,7 @@ EphemeraService.qml is the **coordinator** that owns message state (`messagesMod
 - HTML escaped before markdown rendering; link schemes whitelisted to http/https.
 - Custom URLs validated: http(s) only, valid hostname, max 2048 chars, no unsafe characters.
 - MCP tool access requires exact-contract approval, bounded input-schema validation at the execution boundary, and confirmation of every call. Malformed names, arguments, schemas, and results fail closed.
-- Remote MCP uses HTTPS by default. Non-loopback HTTP requires consent bound to the exact endpoint; URL credentials and query strings are rejected.
+- Remote MCP uses HTTPS by default. Non-loopback HTTP requires consent bound to the exact endpoint; URL credentials and query strings are rejected. Bridge Fetch redirects fail closed so an approved HTTPS endpoint cannot downgrade to HTTP; external-browser navigation remains browser-controlled. The local Node and global npm installation are trusted rather than cryptographically attested.
 - `mcp-remote` versions below 0.1.16 are blocked due to CVE-2025-6514.
 - `forceShutdownExternal()` uses `pkill -x` (exact match) to avoid killing unrelated processes.
 - Chat persistence opt-in; API keys never stored in PluginService.

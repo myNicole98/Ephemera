@@ -219,18 +219,18 @@ SettingsCard {
 
                 DankButton {
                     text: {
-                        if (aiService.mcpService.connecting) return "Connecting…";
-                        if (aiService.mcpService.isConnected) return "Reconnect";
+                        if (aiService.mcpConnecting) return "Connecting…";
+                        if (aiService.mcpConnected) return "Reconnect";
                         return "Connect";
                     }
-                    iconName: aiService.mcpService.isConnected ? "refresh" : "link"
+                    iconName: aiService.mcpConnected ? "refresh" : "link"
                     width: (parent.width - parent.spacing) / 2
                     enabled: {
                         var pendingUrl = mcpUrlField.text.trim();
                         var insecureConsentReady = pendingUrl === aiService.mcpUrl
                             && aiService.mcpInsecureHttpAllowed;
                         return aiService.isOllama
-                            && !aiService.mcpService.connecting
+                            && !aiService.mcpConnecting
                             && pendingUrl.length > 0
                             && (!Mcp.requiresInsecureHttpConsent(pendingUrl) || insecureConsentReady);
                     }
@@ -244,7 +244,7 @@ SettingsCard {
                     text: "Disconnect"
                     iconName: "link_off"
                     width: (parent.width - parent.spacing) / 2
-                    enabled: aiService.mcpService.isConnected || aiService.mcpService.connecting
+                    enabled: aiService.mcpConnected || aiService.mcpConnecting
                     backgroundColor: Theme.error
                     textColor: Theme.onPrimary
                     onClicked: aiService.disconnectMcp()
@@ -264,13 +264,13 @@ SettingsCard {
                 color: Theme.withAlpha(Theme.error, 0.08)
                 border.color: Theme.withAlpha(Theme.error, 0.3)
                 border.width: 1
-                visible: aiService.mcpService.connectionError.length > 0
+                visible: aiService.mcpConnectionError.length > 0
 
                 StyledText {
                     id: mcpErrorText
                     anchors.centerIn: parent
                     width: parent.width - Theme.spacingS * 2
-                    text: aiService.mcpService.connectionError
+                    text: aiService.mcpConnectionError
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.error
@@ -284,13 +284,13 @@ SettingsCard {
                 height: 36
                 radius: Theme.cornerRadius
                 color: {
-                    if (aiService.mcpService.isConnected) return Theme.withAlpha(Theme.primary, 0.10);
-                    if (aiService.mcpService.connecting) return Theme.withAlpha(Theme.secondary, 0.10);
+                    if (aiService.mcpConnected) return Theme.withAlpha(Theme.primary, 0.10);
+                    if (aiService.mcpConnecting) return Theme.withAlpha(Theme.secondary, 0.10);
                     return Theme.withAlpha(Theme.outline, 0.10);
                 }
                 border.color: {
-                    if (aiService.mcpService.isConnected) return Theme.withAlpha(Theme.primary, 0.25);
-                    if (aiService.mcpService.connecting) return Theme.withAlpha(Theme.secondary, 0.25);
+                    if (aiService.mcpConnected) return Theme.withAlpha(Theme.primary, 0.25);
+                    if (aiService.mcpConnecting) return Theme.withAlpha(Theme.secondary, 0.25);
                     return Theme.withAlpha(Theme.outline, 0.15);
                 }
                 border.width: 1
@@ -301,36 +301,36 @@ SettingsCard {
 
                     DankIcon {
                         name: {
-                            if (aiService.mcpService.isConnected) return "check_circle";
-                            if (aiService.mcpService.connecting) return "pending";
+                            if (aiService.mcpConnected) return "check_circle";
+                            if (aiService.mcpConnecting) return "pending";
                             return "radio_button_unchecked";
                         }
                         size: 16
                         color: {
-                            if (aiService.mcpService.isConnected) return Theme.primary;
-                            if (aiService.mcpService.connecting) return Theme.secondary;
+                            if (aiService.mcpConnected) return Theme.primary;
+                            if (aiService.mcpConnecting) return Theme.secondary;
                             return Theme.surfaceVariantText;
                         }
                         anchors.verticalCenter: parent.verticalCenter
 
                         SequentialAnimation on rotation {
                             loops: Animation.Infinite
-                            running: aiService.mcpService.connecting
+                            running: aiService.mcpConnecting
                             NumberAnimation { from: 0; to: 360; duration: 1500; easing.type: Easing.Linear }
                         }
                     }
 
                     StyledText {
                         text: {
-                            if (aiService.mcpService.isConnected)
-                                return "Connected · " + aiService.mcpService.tools.length + " tools · bridge " + aiService.mcpService.bridgeVersion;
-                            if (aiService.mcpService.connecting) return "Connecting…";
+                            if (aiService.mcpConnected)
+                                return "Connected · " + aiService.mcpTools.length + " tools · bridge " + aiService.mcpBridgeVersion;
+                            if (aiService.mcpConnecting) return "Connecting…";
                             return "Not connected";
                         }
                         font.pixelSize: Theme.fontSizeSmall
                         color: {
-                            if (aiService.mcpService.isConnected) return Theme.primary;
-                            if (aiService.mcpService.connecting) return Theme.secondary;
+                            if (aiService.mcpConnected) return Theme.primary;
+                            if (aiService.mcpConnecting) return Theme.secondary;
                             return Theme.surfaceVariantText;
                         }
                         anchors.verticalCenter: parent.verticalCenter
@@ -340,8 +340,8 @@ SettingsCard {
 
             StyledText {
                 width: parent.width
-                visible: aiService.mcpService.ignoredToolCount > 0
-                text: aiService.mcpService.ignoredToolCount + " invalid or unsupported tools were ignored."
+                visible: aiService.mcpIgnoredToolCount > 0
+                text: aiService.mcpIgnoredToolCount + " invalid or unsupported tools were ignored."
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
@@ -350,7 +350,7 @@ SettingsCard {
 
             // Tool list
             AccordionSection {
-                show: aiService.mcpService.isConnected && aiService.mcpService.tools.length > 0
+                show: aiService.mcpConnected && aiService.mcpTools.length > 0
 
                 Column {
                     width: parent.width
@@ -363,149 +363,16 @@ SettingsCard {
                     }
 
                     Repeater {
-                        model: aiService.mcpService.tools
+                        model: aiService.mcpTools
 
-                        Rectangle {
-                            id: toolCard
+                        McpToolContractCard {
                             required property var modelData
-                            property bool reviewingContract: false
-                            readonly property bool contractApproved: aiService.isMcpToolApproved(modelData.name)
                             width: parent.width
-                            height: toolCardColumn.implicitHeight + Theme.spacingS * 2
-                            radius: Theme.cornerRadius
-                            color: Theme.withAlpha(Theme.surfaceContainerHigh, 0.5)
-
-                            Column {
-                                id: toolCardColumn
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.margins: Theme.spacingS
-                                spacing: Theme.spacingS
-
-                                Row {
-                                    width: parent.width
-                                    spacing: Theme.spacingS
-
-                                    DankIcon {
-                                        name: "functions"
-                                        size: 14
-                                        color: Theme.primary
-                                        anchors.top: parent.top
-                                        anchors.topMargin: 2
-                                    }
-
-                                    Column {
-                                        width: parent.width - 14 - contractButton.width - parent.spacing * 2
-                                        spacing: 2
-
-                                        StyledText {
-                                            text: modelData.name
-                                            textFormat: Text.PlainText
-                                            font.pixelSize: Theme.fontSizeSmall
-                                            font.family: Theme.monoFontFamily
-                                            font.weight: Font.Medium
-                                            color: Theme.surfaceText
-                                            width: parent.width
-                                            elide: Text.ElideRight
-                                        }
-
-                                        StyledText {
-                                            text: Mcp.formatReviewText(modelData.description || "")
-                                            textFormat: Text.PlainText
-                                            font.pixelSize: Theme.fontSizeSmall
-                                            color: Theme.surfaceVariantText
-                                            wrapMode: Text.WordWrap
-                                            maximumLineCount: 4
-                                            elide: Text.ElideRight
-                                            width: parent.width
-                                            visible: text.length > 0
-                                        }
-                                    }
-
-                                    DankButton {
-                                        id: contractButton
-                                        text: toolCard.contractApproved ? "Approved" : "Review"
-                                        iconName: toolCard.contractApproved ? "verified" : "policy"
-                                        enabled: aiService.isOllama && aiService.mcpService.isConnected
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        onClicked: toolCard.reviewingContract = !toolCard.reviewingContract
-                                    }
-                                }
-
-                                AccordionSection {
-                                    show: toolCard.reviewingContract
-
-                                    StyledText {
-                                        width: parent.width
-                                        text: "Exact approval contract"
-                                        font.pixelSize: Theme.fontSizeSmall
-                                        font.weight: Font.Medium
-                                        color: Theme.surfaceText
-                                    }
-
-                                    Rectangle {
-                                        width: parent.width
-                                        height: 220
-                                        radius: Theme.cornerRadius * 0.75
-                                        color: Theme.withAlpha(Theme.surfaceContainerHighest, 0.75)
-                                        border.color: Theme.outlineMedium
-                                        border.width: 1
-                                        clip: true
-
-                                        ScrollView {
-                                            anchors.fill: parent
-                                            anchors.margins: Theme.spacingS
-                                            clip: true
-                                            ScrollBar.horizontal.policy: ScrollBar.AsNeeded
-
-                                            TextArea {
-                                                width: parent.width
-                                                text: Mcp.formatToolContract(modelData)
-                                                readOnly: true
-                                                selectByMouse: true
-                                                wrapMode: Text.NoWrap
-                                                textFormat: Text.PlainText
-                                                font.pixelSize: Theme.fontSizeSmall
-                                                font.family: Theme.monoFontFamily
-                                                color: Theme.surfaceText
-                                                background: null
-                                                padding: 0
-                                            }
-                                        }
-                                    }
-
-                                    StyledText {
-                                        width: parent.width
-                                        text: "Approval is invalidated automatically if any displayed field changes. Every invocation still requires confirmation."
-                                        textFormat: Text.PlainText
-                                        font.pixelSize: Theme.fontSizeSmall
-                                        color: Theme.surfaceVariantText
-                                        wrapMode: Text.WordWrap
-                                    }
-
-                                    Row {
-                                        anchors.right: parent.right
-                                        spacing: Theme.spacingS
-
-                                        DankButton {
-                                            text: "Cancel"
-                                            onClicked: toolCard.reviewingContract = false
-                                        }
-
-                                        DankButton {
-                                            text: toolCard.contractApproved ? "Revoke" : "Approve exact contract"
-                                            iconName: toolCard.contractApproved ? "remove_moderator" : "verified_user"
-                                            backgroundColor: toolCard.contractApproved ? Theme.error : Theme.primary
-                                            textColor: Theme.onPrimary
-                                            onClicked: {
-                                                aiService.setMcpToolApproved(modelData.name, !toolCard.contractApproved);
-                                                toolCard.reviewingContract = false;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            toolContract: modelData
+                            contractApproved: aiService.isMcpToolApproved(modelData.name)
+                            approvalEnabled: aiService.isOllama && aiService.mcpConnected
+                            onApprovalChangeRequested: (toolName, approved) =>
+                                aiService.setMcpToolApproved(toolName, approved)
                         }
                     }
                 }

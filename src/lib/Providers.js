@@ -224,6 +224,8 @@ function ollamaRequest(payload) {
         var options = {};
         if (payload.max_tokens > 0) options.num_predict = payload.max_tokens;
         if (temp !== undefined) options.temperature = temp;
+        var contextWindow = normalizeOllamaContextWindow(payload.ollamaContextWindow);
+        if (contextWindow > 0) options.num_ctx = contextWindow;
         if (Object.keys(options).length > 0)
             body.options = options;
         if (thinkingMode === "none")
@@ -240,6 +242,27 @@ function ollamaRequest(payload) {
     }
     // No auth header for Ollama
     return { url: url, headers: [], body: JSON.stringify(body) };
+}
+
+/**
+ * Normalize an optional Ollama context window. Zero uses the model default;
+ * explicit values are bounded to avoid accidental extreme memory allocation.
+ * Explicit values round up to a supported preset so the persisted value and
+ * settings UI cannot diverge.
+ *
+ * @param {*} value - Requested context size.
+ * @returns {number} 0 or one of 4096, 8192, 16384, 32768, 65536, 131072.
+ */
+function normalizeOllamaContextWindow(value) {
+    var parsed = Number(value);
+    if (!isFinite(parsed) || parsed <= 0)
+        return 0;
+    var presets = [4096, 8192, 16384, 32768, 65536, 131072];
+    for (var i = 0; i < presets.length; i++) {
+        if (parsed <= presets[i])
+            return presets[i];
+    }
+    return presets[presets.length - 1];
 }
 
 function normalizeOllamaThinkingMode(mode) {

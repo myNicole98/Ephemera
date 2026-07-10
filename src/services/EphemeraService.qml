@@ -37,9 +37,11 @@ Item {
     property bool persistChat: false
 
     // --- Provider settings ---
-    property string provider: "ollama"
+    property string _provider: "ollama"
+    readonly property string provider: _provider
     property string ollamaUrl: "http://localhost:11434"
     property string ollamaThinkingMode: "default"
+    property int ollamaContextWindow: 0
     property string baseUrl: "http://localhost:11434"
     property string model: ""
     property real temperature: 0.7
@@ -59,11 +61,18 @@ Item {
     property string mcpInsecureHttpTrustKey: ""
     property var mcpApprovedToolContracts: []
     property string mcpApprovedToolsTrustKey: ""
-    property alias mcpService: mcpServiceInstance
     readonly property string mcpTrustKey: Mcp.trustKey(mcpUrl, "mcp-remote")
     readonly property bool mcpToolRequestsAllowed: isOllama && mcpEnabled && mcpAllowToolRequests && mcpToolRequestsTrustKey === mcpTrustKey
     readonly property bool mcpInsecureHttpAllowed: mcpAllowInsecureHttp && mcpInsecureHttpTrustKey === mcpTrustKey
     readonly property var activeMcpToolApprovals: mcpApprovedToolsTrustKey === mcpTrustKey ? mcpApprovedToolContracts : []
+    readonly property bool mcpConnecting: mcpServiceInstance.connecting
+    readonly property bool mcpConnected: mcpServiceInstance.isConnected
+    readonly property string mcpConnectionError: mcpServiceInstance.connectionError
+    readonly property var mcpTools: mcpServiceInstance.tools
+    readonly property int mcpIgnoredToolCount: mcpServiceInstance.ignoredToolCount
+    readonly property string mcpBridgeVersion: mcpServiceInstance.bridgeVersion
+    property bool _settingsLoaded: false
+    property bool _loadingSettings: false
 
     // --- Ollama (delegated to OllamaManager) ---
     property alias availableModels: ollamaManager.availableModels
@@ -158,14 +167,20 @@ Item {
         mcpTools: mcpServiceInstance.tools
         toolCallsAllowed: root.mcpToolRequestsAllowed
         approvedToolContracts: root.activeMcpToolApprovals
-        onMcpToolCallRequested: (toolName, toolArguments, approvedContracts) => {
+        onMcpToolCallRequested: (toolName, toolArguments, approvedContracts,
+                                 streamId, streamProvider, streamGeneration) => {
+            if (!streamingService.matchesActiveStream(streamId, streamProvider, streamGeneration)) {
+                streamingService.toolCallStarted(toolName, -1);
+                return;
+            }
             var callId = mcpServiceInstance.callTool(toolName, toolArguments, approvedContracts);
             streamingService.toolCallStarted(toolName, callId);
         }
         onMcpToolCallCancellationRequested: (callId, reason) => {
             mcpServiceInstance.cancelRequest(callId, reason);
         }
-        onStreamToolRoundReady: (streamId, messages) => root._launchCurlWithMessages(messages)
+        onStreamToolRoundReady: (streamId, messages, streamProvider, streamGeneration) =>
+            root._launchCurlWithMessages(streamId, messages, streamProvider, streamGeneration)
     }
 
     OllamaManager {
@@ -194,7 +209,7 @@ Item {
 
     // ─── Keyring facade ─────────────────────────────────────────────
 
-    function resolveApiKey() { return keyringService.resolveApiKey(provider); }
+    function resolveApiKey(prov) { return keyringService.resolveApiKey(prov || provider); }
     function hasApiKeyForProvider(prov) { return keyringService.hasApiKeyForProvider(prov); }
     function apiKeySource(prov) { return keyringService.apiKeySource(prov); }
     function storeKeyringKey(prov, key) { keyringService.storeKeyringKey(prov, key); }
@@ -222,11 +237,29 @@ Item {
     // ─── Settings persistence (non-secret only) ────────────────────
 
     function loadSettings() {
-        var oldProvider = provider;
+        if (_loadingSettings)
+            return;
+        _loadingSettings = true;
+        try {
+            _loadSettingsValues();
+        } finally {
+            _loadingSettings = false;
+        }
+    }
 
-        provider = String(PluginService.loadPluginData(pluginId, "provider", "ollama")).trim() || "ollama";
+    function _loadSettingsValues() {
+        var oldProvider = provider;
+        var nextProvider = String(PluginService.loadPluginData(
+            pluginId, "provider", "ollama")).trim() || "ollama";
+
+        if (_settingsLoaded && oldProvider !== nextProvider)
+            clearChat();
+
+        _provider = nextProvider;
         ollamaUrl = String(PluginService.loadPluginData(pluginId, "ollamaUrl", "http://localhost:11434")).trim();
         ollamaThinkingMode = Providers.normalizeOllamaThinkingMode(PluginService.loadPluginData(pluginId, "ollamaThinkingMode", "default"));
+        ollamaContextWindow = Providers.normalizeOllamaContextWindow(
+            PluginService.loadPluginData(pluginId, "ollamaContextWindow", 0));
         model = String(PluginService.loadPluginData(pluginId, "model", "")).trim();
         temperature = PluginService.loadPluginData(pluginId, "temperature", 0.7);
         maxTokens = PluginService.loadPluginData(pluginId, "maxTokens", 4096);
@@ -262,9 +295,6 @@ Item {
         persistChat = PluginService.loadPluginData(pluginId, "persistChat", false) === true;
         ollamaManager.ollamaIdleMinutes = Number(PluginService.loadPluginData(pluginId, "ollamaIdleMinutes", 5)) || 5;
 
-        if (oldProvider && oldProvider !== provider)
-            clearChat();
-
         var range = Providers.getTemperatureRange(provider);
         if (temperature > range.max) {
             temperature = range.max;
@@ -275,6 +305,7 @@ Item {
         }
 
         updateBaseUrl();
+        _settingsLoaded = true;
     }
 
     function updateBaseUrl() {
@@ -295,6 +326,27 @@ Item {
     function togglePanelSide() {
         panelOnLeft = !panelOnLeft;
         saveSettingValue("panelOnLeft", panelOnLeft);
+    }
+
+    function setProvider(nextProvider) {
+        var next = String(nextProvider || "").trim() || "ollama";
+        if (next === provider)
+            return false;
+
+        // Reset the active request and its tool state before changing identity.
+        clearChat();
+        _provider = next;
+        saveSettingValue("provider", next);
+        updateBaseUrl();
+        return true;
+    }
+
+    function setOllamaContextWindow(value) {
+        var normalized = Providers.normalizeOllamaContextWindow(value);
+        if (normalized === ollamaContextWindow)
+            return;
+        ollamaContextWindow = normalized;
+        saveSettingValue("ollamaContextWindow", normalized);
     }
 
     function setMcpEnabled(enabled) {
@@ -399,8 +451,9 @@ Item {
         target: PluginService
         function onPluginDataChanged(pId) {
             if (pId !== root.pluginId) return;
+            if (root._loadingSettings) return;
             if (_settingsReloadDebounce.running) return;
-            loadSettings();
+            root.loadSettings();
         }
     }
 
@@ -668,25 +721,36 @@ Item {
     }
 
     function _launchCurl() {
+        var context = streamingService.activeStreamContext();
+        if (!streamingService.matchesActiveStream(
+                context.streamId, context.provider, context.generation)
+                || context.provider !== provider)
+            return;
+
         var payload = _buildPayload(lastUserText);
         var result = _buildCurlCommand(payload);
         if (!result) {
+            var errorMessage;
             if (provider === "ollama") {
-                _applyError(activeStreamId, ollamaReady ? "No Ollama model selected." : "Ollama is not running. Check that ollama is installed and running.");
+                errorMessage = ollamaReady ? "No Ollama model selected."
+                    : "Ollama is not running. Check that ollama is installed and running.";
             } else {
                 var envVar = _envVarForProvider(provider);
                 var hint = _keyringAvailable
                     ? "Store a key in Settings, or set the " + envVar + " environment variable."
                     : "Set the " + envVar + " environment variable before starting Quickshell.";
-                _applyError(activeStreamId, "No API key found.\n" + hint);
+                errorMessage = "No API key found.\n" + hint;
             }
+            streamingService.failActiveStream(errorMessage, context.streamId,
+                                              context.provider, context.generation);
             return;
         }
 
-        var payloadIdx = findIndexById(activeStreamId);
+        var payloadIdx = findIndexById(context.streamId);
         if (payloadIdx >= 0)
             messagesModel.setProperty(payloadIdx, "requestPayload", JSON.stringify(payload, null, 2));
-        streamingService.launchCurl(result, payload.messages);
+        streamingService.launchCurl(result, payload.messages, context.streamId,
+                                    context.provider, context.generation);
     }
 
     function _buildPayload(latestText) {
@@ -720,6 +784,7 @@ Item {
             stream: true,
             timeout: timeout,
             ollamaThinkingMode: ollamaThinkingMode,
+            ollamaContextWindow: ollamaContextWindow,
             thinkingEnabled: thinkingEnabled
         };
         if (provider === "ollama" && root.mcpToolRequestsAllowed && mcpServiceInstance.isConnected) {
@@ -730,30 +795,33 @@ Item {
         return payload;
     }
 
-    function _launchCurlWithMessages(messages) {
+    function _launchCurlWithMessages(streamId, messages, streamProvider, streamGeneration) {
+        if (!streamingService.matchesActiveStream(
+                streamId, streamProvider, streamGeneration)
+                || streamProvider !== provider)
+            return false;
+
         var payload = _buildPayload(lastUserText);
         payload.messages = messages;
-        if (provider === "ollama" && mcpToolRequestsAllowed && mcpServiceInstance.isConnected) {
-            var tools = mcpServiceInstance.getOllamaTools(activeMcpToolApprovals);
-            if (tools.length > 0)
-                payload.tools = tools;
-        }
         var result = _buildCurlCommand(payload);
         if (!result) {
-            _applyError(activeStreamId, "Could not resume after MCP tool call.");
-            return;
+            streamingService.failActiveStream("Could not resume after MCP tool call.",
+                                              streamId, streamProvider, streamGeneration);
+            return false;
         }
-        var payloadIdx = findIndexById(activeStreamId);
+        var payloadIdx = findIndexById(streamId);
         if (payloadIdx >= 0)
             messagesModel.setProperty(payloadIdx, "requestPayload", JSON.stringify(payload, null, 2));
-        streamingService.launchCurl(result, messages);
+        return streamingService.launchCurl(result, messages, streamId,
+                                           streamProvider, streamGeneration);
     }
 
     function _buildCurlCommand(payload) {
-        var key = resolveApiKey();
-        if (provider !== "ollama" && !key) return null;
-        if (provider === "ollama" && !model) return null;
-        return Providers.buildCurlCommand(provider, payload, key);
+        var requestProvider = payload.provider;
+        var key = resolveApiKey(requestProvider);
+        if (requestProvider !== "ollama" && !key) return null;
+        if (requestProvider === "ollama" && !payload.model) return null;
+        return Providers.buildCurlCommand(requestProvider, payload, key);
     }
 
     // ─── Stream signal handlers (apply to messagesModel) ───────────

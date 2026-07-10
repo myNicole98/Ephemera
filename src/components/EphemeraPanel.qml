@@ -40,14 +40,29 @@ PanelWindow {
         else show();
     }
 
+    function _syncWindowEdge() {
+        // Layer-shell applies each anchor property independently. Always release
+        // the old edge before selecting the new one so a side switch can never
+        // transiently stretch the surface between both horizontal edges.
+        if (panelOnLeft) {
+            root.anchors.right = false;
+            root.anchors.left = true;
+        } else {
+            root.anchors.left = false;
+            root.anchors.right = true;
+        }
+    }
+
     visible: isVisible
     screen: modelData
     color: "transparent"
 
     anchors.top: true
     anchors.bottom: true
-    anchors.right: !panelOnLeft
-    anchors.left: panelOnLeft
+    anchors.right: true
+
+    onPanelOnLeftChanged: _syncWindowEdge()
+    Component.onCompleted: _syncWindowEdge()
 
     readonly property real activeWidth: expandable && expanded ? expandedWidth : panelWidth
     implicitWidth: expandable ? expandedWidth + gap : panelWidth + gap
@@ -63,10 +78,10 @@ PanelWindow {
 
     mask: Region {
         item: Rectangle {
-            x: panelOnLeft ? 0 : root.width - alignedWidth
+            x: slide.x + layeredContent.x
             y: 0
-            width: alignedWidth
-            height: root.height
+            width: slide.width
+            height: slide.height
         }
     }
 
@@ -74,8 +89,7 @@ PanelWindow {
         id: slide
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        anchors.right: !panelOnLeft ? parent.right : undefined
-        anchors.left: panelOnLeft ? parent.left : undefined
+        x: root.panelOnLeft ? 0 : parent.width - width
         width: alignedWidth
 
         property real offset: hiddenOffset()

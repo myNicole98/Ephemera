@@ -18,8 +18,10 @@ Item {
     property bool connecting: false
     property string connectionError: ""
     property string nodeVersion: ""
+    property string nodeUndiciVersion: ""
     property string bridgeVersion: ""
     property string undiciVersion: ""
+    property string openVersion: ""
     property int ignoredToolCount: 0
     property var tools: []
     property int _nextId: 1
@@ -31,9 +33,16 @@ Item {
     property bool _stopRequested: false
     property bool _reconnectPending: false
     property bool _versionProbeCancelled: false
+    property string _nodeExecutable: ""
     property string _bridgeExecutable: ""
     property string _bridgeDiagnostics: ""
     property string _readBuffer: ""
+    property string _targetUrl: ""
+    property bool _targetAllowsInsecureHttp: false
+
+    readonly property string connectedUrl: isConnected ? _targetUrl : ""
+    readonly property bool connectedAllowsInsecureHttp: isConnected
+        && _targetAllowsInsecureHttp
 
     readonly property int _connectionTimeoutMs: 60000
     readonly property int _versionProbeTimeoutMs: 10000
@@ -44,11 +53,24 @@ Item {
     readonly property int _maxToolsJsonChars: 1048576
     readonly property int _maxCursorChars: 4096
     readonly property int _maxToolArgumentChars: 20000
-    readonly property string _minimumNodeVersion: "20.18.1"
+    readonly property string _minimumNodeVersion: "24.17.0"
+    readonly property string _maximumNodeVersionExclusive: "25.0.0"
     readonly property string _reviewedBridgeVersion: "0.1.38"
     readonly property string _minimumUndiciVersion: "7.28.0"
     readonly property string _maximumUndiciVersionExclusive: "8.0.0"
+    readonly property var _reviewedOpenVersions: ["10.1.0", "10.2.0"]
     readonly property string _preferredProtocolVersion: "2025-11-25"
+    readonly property var _sanitizedNodeEnvironment: ({
+        "NODE_OPTIONS": null,
+        "NODE_PATH": null,
+        "NODE_TLS_REJECT_UNAUTHORIZED": null,
+        "NODE_DEBUG": null,
+        "__IS_WSL_TEST__": null,
+        "OPENAI_API_KEY": null,
+        "ANTHROPIC_API_KEY": null,
+        "GEMINI_API_KEY": null,
+        "EPHEMERA_API_KEY": null
+    })
     readonly property var _supportedProtocolVersions: [
         "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"
     ]
@@ -58,6 +80,9 @@ Item {
     signal toolCallFailed(var callId, string error)
     signal mcpToolsUpdated()
     signal mcpConnectionStateChanged()
+
+    onMcpUrlChanged: root._handleConfigurationChanged()
+    onAllowInsecureHttpChanged: root._handleConfigurationChanged()
 
     // --- Lifecycle ---
 
@@ -77,19 +102,20 @@ Item {
             connectionError = "";
             return;
         }
-        if (isConnected || connecting)
-            return;
-        if (mcpProcess.running || _versionProbeRunning()) {
-            _reconnectPending = true;
+        if (isConnected || connecting || mcpProcess.running
+                || _versionProbeRunning()) {
+            if (!_targetMatchesConfiguration())
+                reconnectToServer();
             return;
         }
 
-        var error = _configurationError();
+        var error = _configurationError(mcpUrl, allowInsecureHttp);
         if (error) {
             connectionError = error;
             return;
         }
 
+        _captureTarget();
         connectionError = "";
         connecting = true;
         tools = [];
@@ -180,7 +206,9 @@ Item {
     }
 
     function cancelRequest(id, reason) {
-        if (id === undefined || id === null || !_pendingRequests[id])
+        if (typeof id !== "number" || !isFinite(id)
+                || Math.floor(id) !== id || id < 1
+                || !Object.prototype.hasOwnProperty.call(_pendingRequests, id))
             return false;
         delete _pendingRequests[id];
         if (mcpProcess.running)
@@ -229,18 +257,38 @@ Item {
 
     // --- Internal: lifecycle and dependency gate ---
 
-    function _configurationError() {
-        if (!mcpUrl)
+    function _configurationError(url, insecureAllowed) {
+        var targetUrl = String(url || "").trim();
+        if (!targetUrl)
             return "MCP server URL is required.";
-        var validated = Providers.validateUrl(mcpUrl);
+        var validated = Providers.validateUrl(targetUrl);
         if (!validated.valid)
             return validated.error || "Invalid MCP URL.";
-        var safetyError = Mcp.mcpUrlSafetyError(mcpUrl);
+        var safetyError = Mcp.mcpUrlSafetyError(targetUrl);
         if (safetyError)
             return safetyError;
-        if (Mcp.requiresInsecureHttpConsent(mcpUrl) && !allowInsecureHttp)
+        if (Mcp.requiresInsecureHttpConsent(targetUrl)
+                && insecureAllowed !== true)
             return "Remote HTTP MCP requires explicit insecure transport consent.";
         return "";
+    }
+
+    function _captureTarget() {
+        _targetUrl = String(mcpUrl || "").trim();
+        _targetAllowsInsecureHttp = allowInsecureHttp === true;
+    }
+
+    function _targetMatchesConfiguration() {
+        return _targetUrl === String(mcpUrl || "").trim()
+            && _targetAllowsInsecureHttp === (allowInsecureHttp === true);
+    }
+
+    function _handleConfigurationChanged() {
+        if (!enabled || (!isConnected && !connecting && !mcpProcess.running
+                && !_versionProbeRunning()))
+            return;
+        if (!_targetMatchesConfiguration())
+            reconnectToServer();
     }
 
     function _versionProbeRunning() {
@@ -270,11 +318,17 @@ Item {
     function _startVersionProbe() {
         _versionProbeCancelled = false;
         nodeVersion = "";
+        nodeUndiciVersion = "";
         bridgeVersion = "";
         undiciVersion = "";
+        openVersion = "";
+        _nodeExecutable = "";
         _bridgeExecutable = "";
         bridgeVersionTimer.restart();
-        nodeVersionProbe.command = ["node", "--version"];
+        nodeVersionProbe.command = [
+            "node", "-p",
+            "JSON.stringify({nodeVersion:process.versions.node||'',undiciVersion:process.versions.undici||'',executable:process.execPath||''})"
+        ];
         nodeVersionProbe.running = true;
     }
 
@@ -283,12 +337,26 @@ Item {
         if (_finishCancelledProbe())
             return;
 
-        var version = String(output || "").trim();
-        if (exitCode !== 0 || !Mcp.isVersionAtLeast(version, _minimumNodeVersion)) {
-            _dependencyError("MCP requires Node.js " + _minimumNodeVersion + " or newer.");
+        var runtime = Mcp.extractNodeRuntimeInfo(output);
+        if (exitCode !== 0
+                || !Mcp.isVersionInRange(runtime.nodeVersion,
+                                         _minimumNodeVersion,
+                                         _maximumNodeVersionExclusive)) {
+            _dependencyError("MCP requires Node.js " + _minimumNodeVersion
+                + " or newer within major version 24.");
             return;
         }
-        nodeVersion = version.replace(/^v/, "");
+        if (!Mcp.isVersionInRange(runtime.undiciVersion,
+                                  _minimumUndiciVersion,
+                                  _maximumUndiciVersionExclusive)) {
+            _dependencyError("The Node.js runtime must bundle Undici "
+                + _minimumUndiciVersion
+                + " or newer within major version 7. Upgrade to a reviewed Node.js security release.");
+            return;
+        }
+        nodeVersion = runtime.nodeVersion.replace(/^v/, "");
+        nodeUndiciVersion = runtime.undiciVersion;
+        _nodeExecutable = runtime.executable;
         _startPackageProbe();
     }
 
@@ -296,7 +364,7 @@ Item {
         bridgeVersionTimer.restart();
         bridgeVersionProbe.command = [
             "npm", "list", "--global", "--json", "--long", "--depth=1",
-            "mcp-remote", "undici"
+            "mcp-remote", "undici", "open"
         ];
         bridgeVersionProbe.running = true;
     }
@@ -327,9 +395,14 @@ Item {
             _dependencyError("mcp-remote must use undici " + _minimumUndiciVersion + " or newer within major version 7. Reinstall the reviewed bridge release.");
             return;
         }
+        if (_reviewedOpenVersions.indexOf(packageInfo.openVersion) < 0) {
+            _dependencyError("mcp-remote must resolve a reviewed open package version (10.1.0 or 10.2.0). Reinstall the pinned bridge dependencies.");
+            return;
+        }
 
         bridgeVersion = version;
         undiciVersion = packageInfo.undiciVersion;
+        openVersion = packageInfo.openVersion;
         _bridgeExecutable = packageInfo.executable;
         _startBridge();
     }
@@ -339,8 +412,25 @@ Item {
         _reset(message);
     }
 
+    function _fetchGuardPath() {
+        var value = String(Qt.resolvedUrl("../runtime/McpFetchGuard.cjs"));
+        if (value.indexOf("file:///") !== 0)
+            return "";
+        try {
+            return decodeURIComponent(value.slice(7));
+        } catch (e) {
+            return "";
+        }
+    }
+
     function _startBridge() {
-        var error = _configurationError();
+        if (!_targetMatchesConfiguration()) {
+            _reconnectPending = true;
+            _reset("MCP target changed while dependencies were being checked.");
+            _resumePendingReconnect();
+            return;
+        }
+        var error = _configurationError(_targetUrl, _targetAllowsInsecureHttp);
         if (!enabled || error) {
             connectionError = error;
             _reset(error || "MCP disabled.");
@@ -357,12 +447,15 @@ Item {
         tools = [];
         connectionTimer.restart();
 
-        if (!_bridgeExecutable) {
-            _dependencyError("The version-checked mcp-remote executable is unavailable.");
+        var fetchGuard = _fetchGuardPath();
+        if (!_nodeExecutable || !_bridgeExecutable || !fetchGuard) {
+            _dependencyError("The version-checked MCP runtime is unavailable.");
             return;
         }
-        var command = [_bridgeExecutable, mcpUrl];
-        if (/^http:\/\//i.test(mcpUrl))
+        var command = [
+            _nodeExecutable, "-r", fetchGuard, _bridgeExecutable, _targetUrl
+        ];
+        if (/^http:\/\//i.test(_targetUrl))
             command.push("--allow-http");
         mcpProcess.command = command;
         mcpProcess.running = true;
@@ -399,6 +492,30 @@ Item {
         _reset(message);
     }
 
+    function _invokePendingCallback(callback, value) {
+        if (typeof callback !== "function")
+            return "";
+        try {
+            callback(value);
+            return "";
+        } catch (error) {
+            return error && error.message ? String(error.message) : String(error);
+        }
+    }
+
+    function _settlePending(pending, resolved, value) {
+        if (!pending)
+            return;
+        var callback = resolved ? pending.resolve : pending.reject;
+        var callbackError = _invokePendingCallback(callback, value);
+        if (callbackError) {
+            var safeCallbackError = Mcp.formatReviewText(
+                callbackError.slice(0, 256)).slice(0, 256);
+            _abortConnection("MCP response handler failed safely: "
+                + safeCallbackError);
+        }
+    }
+
     function _reset(failMessage) {
         var pending = _pendingRequests;
         _pendingRequests = ({});
@@ -411,14 +528,17 @@ Item {
         _toolRefreshPending = false;
         _negotiatedProtocolVersion = "";
         _readBuffer = "";
+        _targetUrl = "";
+        _targetAllowsInsecureHttp = false;
         tools = [];
         ignoredToolCount = 0;
         mcpConnectionStateChanged();
 
         if (failMessage) {
             for (var id in pending) {
-                if (pending[id] && pending[id].reject)
-                    pending[id].reject(failMessage);
+                if (Object.prototype.hasOwnProperty.call(pending, id)
+                        && pending[id] && pending[id].reject)
+                    _invokePendingCallback(pending[id].reject, failMessage);
             }
         }
     }
@@ -477,32 +597,43 @@ Item {
         } catch (e) {
             return;
         }
-        if (!message || message.jsonrpc !== "2.0")
-            return;
-
-        if (message.method && message.id !== undefined && message.id !== null) {
-            _handleRequest(message.id, message.method, message.params);
-            return;
-        }
-
-        if (message.id !== undefined && message.id !== null) {
-            if (typeof message.id !== "number" || !isFinite(message.id)
-                    || Math.floor(message.id) !== message.id || message.id < 1)
-                return;
-            var pending = _pendingRequests[message.id];
-            if (pending) {
-                delete _pendingRequests[message.id];
-                if (message.error)
-                    pending.reject(message.error.message || JSON.stringify(message.error));
-                else if (message.result !== undefined)
-                    pending.resolve(message.result);
-                else
-                    pending.reject("Invalid JSON-RPC response.");
+        var envelope = Mcp.classifyJsonRpcMessage(message);
+        if (envelope.kind === "invalid") {
+            if (envelope.responseId !== null) {
+                var invalidPending = _pendingRequests[envelope.responseId];
+                if (invalidPending) {
+                    delete _pendingRequests[envelope.responseId];
+                    _settlePending(invalidPending, false,
+                        "Invalid JSON-RPC response: " + envelope.reason);
+                }
             }
             return;
         }
 
-        if (message.method)
+        if (envelope.kind === "request") {
+            _handleRequest(message.id, message.method, message.params);
+            return;
+        }
+
+        if (envelope.kind === "response") {
+            var pending = _pendingRequests[message.id];
+            if (pending) {
+                delete _pendingRequests[message.id];
+                if (Object.prototype.hasOwnProperty.call(message, "error")) {
+                    var safeErrorMessage = Mcp.formatReviewText(
+                        message.error.message.slice(0, _maxDiagnosticChars))
+                        .slice(0, _maxDiagnosticChars);
+                    _settlePending(pending, false, "MCP error "
+                        + message.error.code + ": "
+                        + safeErrorMessage);
+                } else {
+                    _settlePending(pending, true, message.result);
+                }
+            }
+            return;
+        }
+
+        if (envelope.kind === "notification")
             _handleNotification(message.method, message.params);
     }
 
@@ -702,6 +833,7 @@ Item {
     Process {
         id: nodeVersionProbe
         running: false
+        environment: root._sanitizedNodeEnvironment
 
         stdout: StdioCollector {
             id: nodeVersionOutput
@@ -718,6 +850,7 @@ Item {
     Process {
         id: bridgeVersionProbe
         running: false
+        environment: root._sanitizedNodeEnvironment
 
         stdout: StdioCollector {
             id: bridgeVersionOutput
@@ -735,6 +868,7 @@ Item {
         id: mcpProcess
         running: false
         stdinEnabled: true
+        environment: root._sanitizedNodeEnvironment
 
         onStarted: root._sendInitialize()
 

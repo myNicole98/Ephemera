@@ -9,8 +9,11 @@ ShellRoot {
     property int connectionCount: 0
     property int toolRequestCount: 0
     property int toolCompletionCount: 0
+    property int toolRoundCount: 0
+    property int toolCancellationCount: 0
     property var approvedContracts: []
     property var activeApprovals: []
+    property string currentProvider: "ollama"
     property bool finished: false
 
     function finish(success, message) {
@@ -62,7 +65,18 @@ ShellRoot {
                 root.phase = "unapproved";
                 Qt.callLater(function() { root.startToolTurn("blocked", []); });
             } else if (root.connectionCount === 2 && root.phase === "reconnecting") {
-                root.finish(true, "deny, recheck, approve, execute, resume, and reconnect completed");
+                root.phase = "identity-cancel";
+                Qt.callLater(function() {
+                    root.startToolTurn("cancelled-call", root.approvedContracts,
+                        { text: "must-not-resume" });
+                    if (!streaming.toolApprovalPending
+                            || !streaming.approvePendingToolCall()) {
+                        root.finish(false, "identity-cancel tool did not enter execution");
+                        return;
+                    }
+                    root.currentProvider = "openai";
+                    identityCancellationTimer.start();
+                });
             }
         }
 
@@ -76,18 +90,35 @@ ShellRoot {
 
     StreamingService {
         id: streaming
-        provider: "ollama"
+        provider: root.currentProvider
         mcpConnected: mcp.isConnected
         mcpTools: mcp.tools
         toolCallsAllowed: true
         approvedToolContracts: root.activeApprovals
 
-        onMcpToolCallRequested: (toolName, toolArguments, approvals) => {
+        onMcpToolCallRequested: (toolName, toolArguments, approvals,
+                                 streamId, streamProvider, streamGeneration) => {
+            if (!streaming.matchesActiveStream(
+                    streamId, streamProvider, streamGeneration)) {
+                root.finish(false, "tool execution crossed a stream identity boundary");
+                return;
+            }
             root.toolRequestCount++;
             var callId = mcp.callTool(toolName, toolArguments, approvals);
             streaming.toolCallStarted(toolName, callId);
         }
-        onMcpToolCallCancellationRequested: (callId, reason) => mcp.cancelRequest(callId, reason)
+        onMcpToolCallCancellationRequested: (callId, reason) => {
+            if (!mcp.cancelRequest(callId, reason)) {
+                root.finish(false, "active MCP request could not be cancelled");
+                return;
+            }
+            root.toolCancellationCount++;
+        }
+
+        onStreamCancelled: streamId => {
+            if (root.phase !== "identity-cancel" || streamId !== "cancelled-call")
+                root.finish(false, "unexpected stream cancellation: " + streamId);
+        }
 
         onStreamError: (streamId, message) => {
             if (root.phase === "unapproved") {
@@ -138,6 +169,7 @@ ShellRoot {
         }
 
         onStreamToolRoundReady: (streamId, messages) => {
+            root.toolRoundCount++;
             if (root.phase !== "approved" || root.toolRequestCount !== 1
                     || root.toolCompletionCount !== 1) {
                 root.finish(false, "tool execution counts were incorrect");
@@ -152,6 +184,23 @@ ShellRoot {
             }
             root.phase = "reconnecting";
             mcp.reconnectToServer();
+        }
+    }
+
+    Timer {
+        id: identityCancellationTimer
+        interval: 250
+        repeat: false
+        onTriggered: {
+            if (root.currentProvider !== "openai" || streaming.isStreaming
+                    || root.toolRequestCount !== 2
+                    || root.toolCompletionCount !== 1
+                    || root.toolRoundCount !== 1
+                    || root.toolCancellationCount !== 1) {
+                root.finish(false, "provider switch did not contain an in-flight tool result");
+                return;
+            }
+            root.finish(true, "deny, recheck, approve, execute, resume, reconnect, and in-flight cancellation completed");
         }
     }
 }

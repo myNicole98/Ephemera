@@ -1223,6 +1223,24 @@ section("Mcp bridge version helpers");
     assertEqual(Mcp.isVersionInRange("7.27.0", "7.28.0", "8.0.0"), false, "rejects a vulnerable Undici 7 release");
     assertEqual(Mcp.isVersionInRange("7.28.0", "7.28.0", "8.0.0"), true, "accepts the patched Undici 7 floor");
     assertEqual(Mcp.isVersionInRange("8.0.0", "7.28.0", "8.0.0"), false, "rejects an unreviewed Undici major release");
+    assertEqual(Mcp.isVersionInRange("24.17.0", "24.17.0", "25.0.0"), true, "accepts the reviewed Node 24 LTS floor");
+    assertEqual(Mcp.isVersionInRange("24.16.1", "24.17.0", "25.0.0"), false, "rejects Node below the reviewed LTS floor");
+    assertEqual(Mcp.isVersionInRange("25.0.0", "24.17.0", "25.0.0"), false, "rejects an unreviewed Node major");
+
+    var runtimeInfo = Mcp.extractNodeRuntimeInfo(JSON.stringify({
+        nodeVersion: "24.17.0",
+        undiciVersion: "7.28.0",
+        executable: "/opt/node/bin/node"
+    }));
+    assertEqual(runtimeInfo.nodeVersion, "24.17.0", "extracts the probed Node runtime version");
+    assertEqual(runtimeInfo.undiciVersion, "7.28.0", "extracts Node's bundled Undici version");
+    assertEqual(runtimeInfo.executable, "/opt/node/bin/node", "captures the exact checked Node executable");
+    assertEqual(Mcp.extractNodeRuntimeInfo(JSON.stringify({
+        nodeVersion: "24.17.0", undiciVersion: "7.28.0", executable: "node"
+    })).executable, "", "rejects a non-absolute Node executable");
+    assertEqual(Mcp.extractNodeRuntimeInfo(JSON.stringify({
+        nodeVersion: "24.17.0", executable: "/opt/node/bin/node"
+    })).nodeVersion, "", "fails closed when bundled Undici is not reported");
 
     var npmOutput = JSON.stringify({
         dependencies: {
@@ -1230,13 +1248,17 @@ section("Mcp bridge version helpers");
                 version: "0.1.38",
                 path: "/opt/npm/lib/node_modules/mcp-remote",
                 bin: { "mcp-remote": "dist/proxy.js" },
-                dependencies: { undici: { version: "7.28.0" } }
+                dependencies: {
+                    undici: { version: "7.28.0" },
+                    open: { version: "10.2.0" }
+                }
             }
         }
     });
     assertEqual(Mcp.extractNpmPackageVersion(npmOutput, "mcp-remote"), "0.1.38", "extracts the installed npm version");
     assertEqual(Mcp.extractNpmPackageInfo(npmOutput, "mcp-remote").executable, "/opt/npm/lib/node_modules/mcp-remote/dist/proxy.js", "extracts the checked executable path");
     assertEqual(Mcp.extractNpmPackageInfo(npmOutput, "mcp-remote").undiciVersion, "7.28.0", "extracts the direct Undici runtime version");
+    assertEqual(Mcp.extractNpmPackageInfo(npmOutput, "mcp-remote").openVersion, "10.2.0", "extracts the reviewed browser launcher version");
     var missingRuntimeDependency = JSON.stringify({
         dependencies: {
             "mcp-remote": {
@@ -1248,10 +1270,47 @@ section("Mcp bridge version helpers");
     });
     assertEqual(Mcp.extractNpmPackageInfo(missingRuntimeDependency, "mcp-remote").undiciVersion,
         "", "fails closed when the Undici runtime dependency is absent");
+    assertEqual(Mcp.extractNpmPackageInfo(missingRuntimeDependency, "mcp-remote").openVersion,
+        "", "fails closed when the browser launcher dependency is absent");
     var shadowed = JSON.stringify({ dependencies: { "mcp-remote": { version: "0.1.38", path: "/tmp/package", bin: { "mcp-remote": "../shadow" } } } });
     assertEqual(Mcp.extractNpmPackageInfo(shadowed, "mcp-remote").executable, "", "rejects an unexpected package executable layout");
     assertEqual(Mcp.extractNpmPackageVersion("not json", "mcp-remote"), "", "rejects malformed npm output");
     assertEqual(Mcp.extractNpmPackageVersion("{}", "mcp-remote"), "", "handles a missing package");
+})();
+
+section("Mcp JSON-RPC envelope validation");
+(function() {
+    assertEqual(Mcp.classifyJsonRpcMessage({
+        jsonrpc: "2.0", id: 1, result: null
+    }).kind, "response", "accepts a result response with an explicit null result");
+    assertEqual(Mcp.classifyJsonRpcMessage({
+        jsonrpc: "2.0", id: 2,
+        error: { code: -32601, message: "Method not found" }
+    }).kind, "response", "accepts a well-formed JSON-RPC error response");
+    assertEqual(Mcp.classifyJsonRpcMessage({
+        jsonrpc: "2.0", id: 3, result: {},
+        error: { code: -32603, message: "both" }
+    }).kind, "invalid", "rejects a response containing result and error");
+    assertEqual(Mcp.classifyJsonRpcMessage({
+        jsonrpc: "2.0", id: 3, result: {}, params: {}
+    }).responseId, 3, "rejects response-only protocol fields without stalling its pending id");
+    var malformedError = Mcp.classifyJsonRpcMessage({
+        jsonrpc: "2.0", id: 4, error: { code: "-1", message: 7 }
+    });
+    assertEqual(malformedError.kind, "invalid", "rejects an error-only malformed response");
+    assertEqual(malformedError.responseId, 4, "retains the safe pending id for a malformed error response");
+    assertEqual(Mcp.classifyJsonRpcMessage({
+        jsonrpc: "2.0", id: "__proto__", result: {}
+    }).kind, "invalid", "rejects string response ids before pending-map access");
+    assertEqual(Mcp.classifyJsonRpcMessage({
+        jsonrpc: "2.0", method: 7, params: {}
+    }).kind, "invalid", "rejects a non-string method");
+    assertEqual(Mcp.classifyJsonRpcMessage({
+        jsonrpc: "2.0", method: "ping", id: "server-request", params: []
+    }).kind, "request", "accepts a bounded string id for a server request");
+    assertEqual(Mcp.classifyJsonRpcMessage({
+        jsonrpc: "2.0", method: "notifications/tools/list_changed"
+    }).kind, "notification", "accepts a valid notification envelope");
 })();
 
 section("Mcp endpoint safety helpers");
@@ -1914,6 +1973,70 @@ section("Providers.getModelList");
     var unknown = Providers.getModelList("nonexistent");
     assert(Array.isArray(unknown), "unknown provider returns an array");
     assertEqual(unknown.length, 0, "unknown provider has no models");
+})();
+
+// ═════════════════════════════════════════════════════════════════
+// EphemeraPanel side-switch regression tests
+// ═════════════════════════════════════════════════════════════════
+
+section("EphemeraPanel rapid side switching");
+
+(function() {
+    var panelSource = fs.readFileSync(
+        path.join(__dirname, "..", "src/components/EphemeraPanel.qml"),
+        "utf8"
+    );
+    var functionMatch = panelSource.match(
+        /function _syncWindowEdge\(\) \{([\s\S]*?)\n    \}\n\n    visible:/
+    );
+    assert(!!functionMatch, "window edge synchronizer remains testable");
+    if (!functionMatch) return;
+
+    var runEdgeSync = new Function("root", "panelOnLeft", functionMatch[1]);
+    var left = false;
+    var right = true;
+    var exposedOppositeEdges = false;
+    var anchors = {};
+
+    function recordAnchorState() {
+        if (left && right) exposedOppositeEdges = true;
+    }
+
+    Object.defineProperties(anchors, {
+        left: {
+            get: function() { return left; },
+            set: function(value) { left = value; recordAnchorState(); }
+        },
+        right: {
+            get: function() { return right; },
+            set: function(value) { right = value; recordAnchorState(); }
+        }
+    });
+
+    for (var i = 0; i < 40; i++) {
+        var panelOnLeft = i % 2 === 0;
+        runEdgeSync({ anchors: anchors }, panelOnLeft);
+        assert(
+            left === panelOnLeft && right === !panelOnLeft,
+            "toggle " + (i + 1) + " selects exactly one layer-shell edge"
+        );
+    }
+
+    assert(!exposedOppositeEdges, "40 rapid toggles never expose both horizontal edges");
+    assert(
+        panelSource.indexOf("onPanelOnLeftChanged: _syncWindowEdge()") >= 0
+            && panelSource.indexOf("Component.onCompleted: _syncWindowEdge()") >= 0,
+        "side changes and initial construction both synchronize the layer-shell edge"
+    );
+    assert(
+        panelSource.indexOf("x: root.panelOnLeft ? 0 : parent.width - width") >= 0,
+        "slide position uses x instead of conditional horizontal anchors"
+    );
+    assert(
+        panelSource.indexOf("x: slide.x + layeredContent.x") >= 0
+            && panelSource.indexOf("width: slide.width") >= 0,
+        "input mask follows the animated slide geometry"
+    );
 })();
 
 // ─── Summary ───────────────────────────────────────────────────
